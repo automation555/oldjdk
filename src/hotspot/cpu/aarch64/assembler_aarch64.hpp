@@ -349,9 +349,8 @@ namespace ext
 // Addressing modes
 class Address {
  public:
-
-  enum mode { no_mode, base_plus_offset, pre, post, post_reg, pcrel,
-              base_plus_offset_reg, literal };
+  enum addr_mode { no_mode, addr_literal, pre, post, post_reg,
+                   base_plus_offset, base_plus_offset_reg };
 
   // Shift and extend for base reg + reg offset addressing
   class extend {
@@ -382,53 +381,50 @@ class Address {
   };
 
  private:
-  Register _base;
-  Register _index;
-  int64_t _offset;
-  enum mode _mode;
-  extend _ext;
+  addr_mode _mode;
+  Register  _base;
+  Register  _index;
+  int64_t   _offset;
+  extend    _extend;
 
   RelocationHolder _rspec;
-
   // Typically we use AddressLiterals we want to use their rval
   // However in some situations we want the lval (effect address) of
   // the item.  We provide a special factory for making those lvals.
-  bool _is_lval;
-
+  bool      _is_lval;
   // If the target is far we'll need to load the ea of this to a
   // register to reach it. Otherwise if near we can do PC-relative
   // addressing.
-  address          _target;
+  address   _target;
 
  public:
-  Address()
-    : _mode(no_mode) { }
-  Address(Register r)
-    : _base(r), _index(noreg), _offset(0), _mode(base_plus_offset), _target(0) { }
+  Address() : _mode(no_mode) {}
+
+  Address(Register r) : Address(r, 0) {}
 
   template<typename T, ENABLE_IF(std::is_integral<T>::value)>
-  Address(Register r, T o)
-    : _base(r), _index(noreg), _offset(o), _mode(base_plus_offset), _target(0) {}
+  Address(Register r, T o) : _mode(base_plus_offset),
+    _base(r), _index(noreg), _offset(o), _extend(lsl(0)), _target(nullptr) {}
 
-  Address(Register r, ByteSize disp)
-    : Address(r, in_bytes(disp)) { }
-  Address(Register r, Register r1, extend ext = lsl())
-    : _base(r), _index(r1), _offset(0), _mode(base_plus_offset_reg),
-      _ext(ext), _target(0) { }
-  Address(Pre p)
-    : _base(p.reg()), _offset(p.offset()), _mode(pre) { }
-  Address(Post p)
-    : _base(p.reg()),  _index(p.idx_reg()), _offset(p.offset()),
-      _mode(p.is_postreg() ? post_reg : post), _target(0) { }
-  Address(address target, RelocationHolder const& rspec)
-    : _mode(literal),
-      _rspec(rspec),
-      _is_lval(false),
-      _target(target)  { }
+  Address(Register r, ByteSize disp) : Address(r, in_bytes(disp)) {}
+
+  Address(Register r, Register r1, extend ext = lsl(0)) : _mode(base_plus_offset_reg),
+    _base(r), _index(r1), _offset(0), _extend(ext), _target(nullptr) {}
+
+  Address(Pre p) : _mode(pre),
+    _base(p.reg()), _index(noreg), _offset(p.offset()),
+    _extend(lsl(0)), _target(nullptr) {}
+  Address(Post p) : _mode(p.is_postreg() ? post_reg : post),
+    _base(p.reg()), _index(p.idx_reg()), _offset(p.offset()),
+    _extend(lsl(0)), _target(nullptr) {}
+
+  Address(address target, RelocationHolder const& rspec) : _mode(addr_literal),
+    _rspec(rspec), _is_lval(false), _target(target)  {}
   Address(address target, relocInfo::relocType rtype = relocInfo::external_word_type);
-  Address(Register base, RegisterOrConstant index, extend ext = lsl())
-    : _base (base),
-      _offset(0), _ext(ext), _target(0) {
+
+  Address(Register base, RegisterOrConstant index, extend ext = lsl(0))
+    : _base(base), _index(noreg), _offset(0), _extend(ext), _target(nullptr)
+  {
     if (index.is_register()) {
       _mode = base_plus_offset_reg;
       _index = index.as_register();
@@ -441,27 +437,50 @@ class Address {
   }
 
   Register base() const {
-    guarantee((_mode == base_plus_offset || _mode == base_plus_offset_reg
-               || _mode == post || _mode == post_reg),
-              "wrong mode");
+    precond(_mode != no_mode && _mode != addr_literal);
     return _base;
   }
   int64_t offset() const {
+    precond(_mode == base_plus_offset || _mode == pre || _mode == post ||
+            (_mode == base_plus_offset_reg && _offset == 0));
     return _offset;
   }
   Register index() const {
+    precond(_mode == base_plus_offset_reg || _mode == post_reg ||
+            (_mode == base_plus_offset && _index == noreg));
     return _index;
   }
-  mode getMode() const {
+  extend const &ext() const {
+    precond(_mode != no_mode && _mode != addr_literal);
+    return _extend;
+  }
+  addr_mode mode() const {
     return _mode;
   }
-  bool uses(Register reg) const { return _base == reg || _index == reg; }
-  address target() const { return _target; }
+  bool uses(Register reg) const {
+    precond(_mode != no_mode && _mode != addr_literal);
+    switch (_mode) {
+      case base_plus_offset:
+      case post:
+      case pre:
+        return _base == reg;
+      case base_plus_offset_reg:
+      case post_reg:
+        return _base == reg || _index == reg;
+      default:
+        break;
+    }
+    return false;
+  }
+  address target() const {
+    precond(_mode == addr_literal);
+    return _target;
+  }
   const RelocationHolder& rspec() const { return _rspec; }
 
   void encode(Instruction_aarch64 *i) const {
     i->f(0b111, 29, 27);
-    i->srf(_base, 5);
+    i->srf(base(), 5);
 
     switch(_mode) {
     case base_plus_offset:
@@ -472,16 +491,16 @@ class Address {
           assert(size == 0, "bad size");
           size = 0b100;
         }
-        assert(offset_ok_for_immed(_offset, size),
-               "must be, was: " INT64_FORMAT ", %d", _offset, size);
+        assert(offset_ok_for_immed(offset(), size),
+               "must be, was: " INT64_FORMAT ", %d", offset(), size);
         unsigned mask = (1 << size) - 1;
-        if (_offset < 0 || _offset & mask) {
+        if (offset() < 0 || offset() & mask) {
           i->f(0b00, 25, 24);
           i->f(0, 21), i->f(0b00, 11, 10);
-          i->sf(_offset, 20, 12);
+          i->sf(offset(), 20, 12);
         } else {
           i->f(0b01, 25, 24);
-          i->f(_offset >> size, 21, 10);
+          i->f(offset() >> size, 21, 10);
         }
       }
       break;
@@ -490,8 +509,8 @@ class Address {
       {
         i->f(0b00, 25, 24);
         i->f(1, 21);
-        i->rf(_index, 16);
-        i->f(_ext.option(), 15, 13);
+        i->rf(index(), 16);
+        i->f(ext().option(), 15, 13);
         unsigned size = i->get(31, 30);
         if (i->get(26, 26) && i->get(23, 23)) {
           // SIMD Q Type - Size = 128 bits
@@ -499,10 +518,10 @@ class Address {
           size = 0b100;
         }
         if (size == 0) // It's a byte
-          i->f(_ext.shift() >= 0, 12);
+          i->f(ext().shift() >= 0, 12);
         else {
-          assert(_ext.shift() <= 0 || _ext.shift() == (int)size, "bad shift");
-          i->f(_ext.shift() > 0, 12);
+          assert(ext().shift() <= 0 || ext().shift() == (int)size, "bad shift");
+          i->f(ext().shift() > 0, 12);
         }
         i->f(0b10, 11, 10);
       }
@@ -511,13 +530,13 @@ class Address {
     case pre:
       i->f(0b00, 25, 24);
       i->f(0, 21), i->f(0b11, 11, 10);
-      i->sf(_offset, 20, 12);
+      i->sf(offset(), 20, 12);
       break;
 
     case post:
       i->f(0b00, 25, 24);
       i->f(0, 21), i->f(0b01, 11, 10);
-      i->sf(_offset, 20, 12);
+      i->sf(offset(), 20, 12);
       break;
 
     default:
@@ -559,9 +578,9 @@ class Address {
     }
 
     size = 4 << size;
-    guarantee(_offset % size == 0, "bad offset");
-    i->sf(_offset / size, 21, 15);
-    i->srf(_base, 5);
+    guarantee(offset() % size == 0, "bad offset");
+    i->sf(offset() / size, 21, 15);
+    i->srf(base(), 5);
   }
 
   void encode_nontemporal_pair(Instruction_aarch64 *i) const {
@@ -569,9 +588,9 @@ class Address {
     i->f(0b000, 25, 23);
     unsigned size = i->get(31, 31);
     size = 4 << size;
-    guarantee(_offset % size == 0, "bad offset");
-    i->sf(_offset / size, 21, 15);
-    i->srf(_base, 5);
+    guarantee(offset() % size == 0, "bad offset");
+    i->sf(offset() / size, 21, 15);
+    i->srf(base(), 5);
     guarantee(_mode == Address::base_plus_offset,
               "Bad addressing mode for non-temporal op");
   }
@@ -595,19 +614,17 @@ class Address {
 
 // Convience classes
 class RuntimeAddress: public Address {
-
-  public:
-
-  RuntimeAddress(address target) : Address(target, relocInfo::runtime_call_type) {}
-
+ public:
+  RuntimeAddress(address target) : Address(target, relocInfo::runtime_call_type) {
+    precond(target != nullptr);
+  }
 };
 
 class OopAddress: public Address {
-
-  public:
-
-  OopAddress(address target) : Address(target, relocInfo::oop_type){}
-
+ public:
+  OopAddress(address target) : Address(target, relocInfo::oop_type) {
+    precond(target != nullptr);
+  }
 };
 
 class ExternalAddress: public Address {
@@ -621,16 +638,16 @@ class ExternalAddress: public Address {
   }
 
  public:
-
-  ExternalAddress(address target) : Address(target, reloc_for_target(target)) {}
-
+  ExternalAddress(address target) : Address(target, reloc_for_target(target)) {
+    precond(target != nullptr);
+  }
 };
 
 class InternalAddress: public Address {
-
-  public:
-
-  InternalAddress(address target) : Address(target, relocInfo::internal_word_type) {}
+ public:
+  InternalAddress(address target) : Address(target, relocInfo::internal_word_type) {
+    precond(target != nullptr);
+  }
 };
 
 const int FPUStateSizeInWords = FloatRegisterImpl::number_of_registers *
@@ -1425,7 +1442,7 @@ public:
     // down into Address::encode) because the encoding of this
     // instruction is too different from all of the other forms to
     // make it worth sharing.
-    if (adr.getMode() == Address::literal) {
+    if (adr.mode() == Address::addr_literal) {
       assert(size == 0b10 || size == 0b11, "bad operand size in ldr");
       assert(op == 0b01, "literal form can only be used with loads");
       f(size & 0b01, 31, 30), f(0b011, 29, 27), f(0b00, 25, 24);
@@ -2267,7 +2284,7 @@ public:
   }
 
   void ld_st(FloatRegister Vt, SIMD_Arrangement T, Address a, int op1, int op2, int regs) {
-    switch (a.getMode()) {
+    switch (a.mode()) {
     case Address::base_plus_offset:
       guarantee(a.offset() == 0, "no offset allowed here");
       ld_st(Vt, T, a.base(), op1, op2);
@@ -3045,7 +3062,6 @@ public:
   INSN(sve_and,  0b00000100, 0b011010000); // vector and
   INSN(sve_andv, 0b00000100, 0b011010001); // bitwise and reduction to scalar
   INSN(sve_asr,  0b00000100, 0b010000100); // vector arithmetic shift right
-  INSN(sve_bic,  0b00000100, 0b011011000); // vector bitwise clear
   INSN(sve_cnt,  0b00000100, 0b011010101); // count non-zero bits
   INSN(sve_cpy,  0b00000101, 0b100000100); // copy scalar to each active vector element
   INSN(sve_eor,  0b00000100, 0b011001000); // vector eor
@@ -3190,7 +3206,7 @@ private:
   void sve_ld_st1(FloatRegister Zt, PRegister Pg,
               SIMD_RegVariant T, const Address &a,
               int op1, int type, int imm_op2, int scalar_op2) {
-    switch (a.getMode()) {
+    switch (a.mode()) {
     case Address::base_plus_offset:
       sve_ld_st1(Zt, a.base(), a.offset(), Pg, T, op1, type, imm_op2);
       break;
