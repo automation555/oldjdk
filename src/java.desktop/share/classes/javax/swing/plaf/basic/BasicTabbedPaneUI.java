@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,60 +25,21 @@
 
 package javax.swing.plaf.basic;
 
-import java.awt.Color;
-import java.awt.Component;
-import java.awt.Container;
-import java.awt.Dimension;
-import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.Graphics;
-import java.awt.Graphics2D;
-import java.awt.Insets;
-import java.awt.LayoutManager;
-import java.awt.Point;
-import java.awt.Polygon;
-import java.awt.Rectangle;
-import java.awt.Shape;
-import java.awt.event.ActionEvent;
-import java.awt.event.ActionListener;
-import java.awt.event.ContainerEvent;
-import java.awt.event.ContainerListener;
-import java.awt.event.FocusAdapter;
-import java.awt.event.FocusEvent;
-import java.awt.event.FocusListener;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.awt.event.MouseListener;
-import java.awt.event.MouseMotionListener;
-import java.beans.PropertyChangeEvent;
-import java.beans.PropertyChangeListener;
-import java.util.Hashtable;
-import java.util.Vector;
+import sun.swing.SwingUtilities2;
 
-import javax.swing.Action;
-import javax.swing.ActionMap;
-import javax.swing.Icon;
-import javax.swing.InputMap;
-import javax.swing.JButton;
-import javax.swing.JComponent;
-import javax.swing.JPanel;
-import javax.swing.JTabbedPane;
-import javax.swing.JViewport;
-import javax.swing.KeyStroke;
-import javax.swing.LookAndFeel;
-import javax.swing.SwingConstants;
-import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
-import javax.swing.event.ChangeEvent;
-import javax.swing.event.ChangeListener;
-import javax.swing.plaf.ComponentInputMapUIResource;
-import javax.swing.plaf.ComponentUI;
-import javax.swing.plaf.TabbedPaneUI;
-import javax.swing.plaf.UIResource;
+import javax.swing.*;
+import javax.swing.event.*;
+import javax.swing.plaf.*;
 import javax.swing.text.View;
 
+import java.awt.*;
+import java.awt.event.*;
+import java.beans.PropertyChangeListener;
+import java.beans.PropertyChangeEvent;
+import java.util.Vector;
+import java.util.Hashtable;
+
 import sun.swing.DefaultLookup;
-import sun.swing.SwingUtilities2;
 import sun.swing.UIAction;
 
 /**
@@ -255,7 +216,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     public BasicTabbedPaneUI() {}
 
     /**
-     * Creates a UI.
+     * Create a UI.
      * @param c a component
      * @return a UI
      */
@@ -425,7 +386,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-     * Installs the defaults.
+     * Install the defaults.
      */
     protected void installDefaults() {
         LookAndFeel.installColorsAndFont(tabPane, "TabbedPane.background",
@@ -462,7 +423,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-     * Uninstalls the defaults.
+     * Uninstall the defaults.
      */
     protected void uninstallDefaults() {
         highlight = null;
@@ -477,7 +438,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-     * Installs the listeners.
+     * Install the listeners.
      */
     protected void installListeners() {
         if ((propertyChangeListener = createPropertyChangeListener()) != null) {
@@ -500,7 +461,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-     * Uninstalls the listeners.
+     * Uninstall the listeners.
      */
     protected void uninstallListeners() {
         if (mouseListener != null) {
@@ -955,7 +916,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
      * Paints a tab.
      * @param g the graphics
      * @param tabPlacement the tab placement
-     * @param rects the tab rectangles
+     * @param rects rectangles
      * @param tabIndex the tab index
      * @param iconRect the icon rectangle
      * @param textRect the text rectangle
@@ -1129,9 +1090,9 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-     * Lays out a label.
+     * Laysout a label.
      * @param tabPlacement the tab placement
-     * @param metrics the font metrics
+     * @param metrics the font metric
      * @param tabIndex the tab index
      * @param title the title
      * @param icon the icon
@@ -1301,7 +1262,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
      * Paints the focus indicator.
      * @param g the graphics
      * @param tabPlacement the tab placement
-     * @param rects the tab rectangles
+     * @param rects rectangles
      * @param tabIndex the tab index
      * @param iconRect the icon rectangle
      * @param textRect the text rectangle
@@ -1346,9 +1307,9 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-      * Paints the border around a tab.
-      * Note that this function does not paint the background of the tab,
-      * that is done elsewhere.
+      * this function draws the border around each tab
+      * note that this function does now draw the background of the tab.
+      * that is done elsewhere
       *
       * @param g             the graphics context in which to paint
       * @param tabPlacement  the placement (left, right, bottom, top) of the tab
@@ -1878,7 +1839,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-     * Assures the tab rectangles are created.
+     * Assure the rectangles are created.
      * @param tabCount the tab count
      */
     protected void assureRectsCreated(int tabCount) {
@@ -2183,7 +2144,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
 // Tab Navigation methods
 
     /**
-     * Navigates the selected tab.
+     * Navigate the selected tab.
      * @param direction the direction
      */
     protected void navigateSelectedTab(int direction) {
@@ -2265,7 +2226,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-     * Selects the next tab in the run.
+     * Select the next tab in the run.
      * @param current the current tab
      */
     protected void selectNextTabInRun(int current) {
@@ -2279,7 +2240,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-     * Selects the previous tab in the run.
+     * Select the previous tab in the run.
      * @param current the current tab
      */
     protected void selectPreviousTabInRun(int current) {
@@ -2293,7 +2254,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-     * Selects the next tab.
+     * Select the next tab.
      * @param current the current tab
      */
     protected void selectNextTab(int current) {
@@ -2306,7 +2267,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
     }
 
     /**
-     * Selects the previous tab.
+     * Select the previous tab.
      * @param current the current tab
      */
     protected void selectPreviousTab(int current) {
@@ -2482,8 +2443,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
      * @return the previous tab index
      */
     protected int getPreviousTabIndex(int base) {
-        int tabIndex = (base - 1 >= 0? base - 1 : tabPane.getTabCount() - 1);
-        return (tabIndex >= 0? tabIndex : 0);
+        return Math.max(base - 1 >= 0? base - 1 : tabPane.getTabCount() - 1, 0);
     }
 
     /**
@@ -2537,8 +2497,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
      * @return the previous tab run
      */
     protected int getPreviousTabRun(int baseRun) {
-        int runIndex = (baseRun - 1 >= 0? baseRun - 1 : runCount - 1);
-        return (runIndex >= 0? runIndex : 0);
+        return Math.max(baseRun - 1 >= 0? baseRun - 1 : runCount - 1, 0);
     }
 
     /**
@@ -2811,7 +2770,7 @@ public class BasicTabbedPaneUI extends TabbedPaneUI implements SwingConstants {
          * Returns the preferred tab area width.
          * @param tabPlacement the tab placement
          * @param height the height
-         * @return the preferred tab area width
+         * @return the preferred tab area widty
          */
         protected int preferredTabAreaWidth(int tabPlacement, int height) {
             FontMetrics metrics = getFontMetrics();
