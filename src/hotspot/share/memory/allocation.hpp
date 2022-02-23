@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -146,7 +146,6 @@ class AllocatedObj {
   f(mtServiceability, "Serviceability")                                              \
   f(mtMetaspace,      "Metaspace")                                                   \
   f(mtStringDedup,    "String Deduplication")                                        \
-  f(mtObjectMonitor,  "Object Monitors")                                             \
   f(mtNone,           "Unknown")                                                     \
   //end
 
@@ -171,7 +170,15 @@ MEMORY_TYPES_DO(MEMORY_TYPE_SHORTNAME)
 // Make an int version of the sentinel end value.
 constexpr int mt_number_of_types = static_cast<int>(MEMFLAGS::mt_number_of_types);
 
+#if INCLUDE_NMT
+
 extern bool NMT_track_callsite;
+
+#else
+
+const bool NMT_track_callsite = false;
+
+#endif // INCLUDE_NMT
 
 class NativeCallStack;
 
@@ -384,32 +391,75 @@ extern void resource_free_bytes( char *old, size_t size );
 // Optionally, objects may be allocated on the C heap with
 // new(ResourceObj::C_HEAP) Foo(...) or in an Arena with new (&arena)
 // ResourceObj's can be allocated within other objects, but don't use
-// new or delete (allocation_type is unknown).  If new is used to allocate,
-// use delete to deallocate.
+// new or delete (allocation_type is unknown).  Only use delete on C_HEAP
+// allocated objects
 class ResourceObj ALLOCATION_SUPER_CLASS_SPEC {
  public:
-  enum allocation_type { STACK_OR_EMBEDDED = 0, RESOURCE_AREA, C_HEAP, ARENA, allocation_mask = 0x3 };
-  static void set_allocation_type(address res, allocation_type type) NOT_DEBUG_RETURN;
+  enum allocation_type : uint8_t { STACK_OR_EMBEDDED, RESOURCE_AREA, C_HEAP, ARENA };
 #ifdef ASSERT
  private:
-  // When this object is allocated on stack the new() operator is not
-  // called but garbage on stack may look like a valid allocation_type.
-  // Store negated 'this' pointer when new() is called to distinguish cases.
-  // Use second array's element for verification value to distinguish garbage.
-  uintptr_t _allocation_t[2];
-  bool is_type_set() const;
-  void initialize_allocation_info();
+  allocation_type _type;
+  // This debug class is used to record allocation_type when operator new is called.
+  // A few entries are needed (depending on compiler and complexity of expressions).
+  // When the code was written 2 entries was needed on clang.
+  //
+  // With this information we can, given a pointer, know how that pointer was
+  // allocated iff we remove this information directly in the constructor. One
+  // additional unfortunate restriction is that (in general) multiple inheritance
+  // can not be used. This is unfortunate, but this limitation also existed in the
+  // previous solution that failed because it also relied on writing to an
+  // un-initalized object before it was constructed. The code will also fail if the
+  // allocation is done in a recursive step. In that case an assert will trigger.
+  class RecentAllocations {
+    static const unsigned BufferSize = 5;
+    uintptr_t _begin[BufferSize];
+    uintptr_t _past_end[BufferSize];
+    allocation_type _types[BufferSize];
+  public:
+    constexpr RecentAllocations() : _begin{},  _past_end{}, _types{} { }
+
+    void set_type(void* begin_ptr, size_t size, allocation_type type) {
+      uintptr_t begin = reinterpret_cast<uintptr_t>(begin_ptr);
+      for (unsigned i = 0; i < BufferSize; ++i) {
+        if (_begin[i] == 0) {
+          assert(_past_end[i] == 0, "should have been reset");
+          assert(_types[i] == STACK_OR_EMBEDDED, "should have been reset");
+          _begin[i] = begin;
+          _past_end[i] = begin + size;
+          _types[i] = type;
+          return;
+        }
+      }
+      assert(false, "too small buffer, please adjust BufferSize");
+    }
+
+    allocation_type remove_type(void* p) {
+      uintptr_t ptr = reinterpret_cast<uintptr_t>(p);
+      for (unsigned i = 0; i < BufferSize; ++i) {
+        if (_begin[i] <= ptr && ptr < _past_end[i]) {
+          allocation_type type = _types[i];
+          _begin[i] = 0;
+          _past_end[i] = 0;
+          _types[i] = STACK_OR_EMBEDDED;
+          return type;
+        }
+      }
+
+      // type not found, that is, operator new was not called, and the object is STACK_OR_EMBEDDED
+      return STACK_OR_EMBEDDED;
+   }
+  };
  public:
+  static THREAD_LOCAL RecentAllocations _recent_allocations;
   allocation_type get_allocation_type() const;
   bool allocated_on_stack_or_embedded() const { return get_allocation_type() == STACK_OR_EMBEDDED; }
-  bool allocated_on_res_area() const { return get_allocation_type() == RESOURCE_AREA; }
-  bool allocated_on_C_heap()   const { return get_allocation_type() == C_HEAP; }
-  bool allocated_on_arena()    const { return get_allocation_type() == ARENA; }
+  bool allocated_on_res_area()          const { return get_allocation_type() == RESOURCE_AREA; }
+  bool allocated_on_C_heap()            const { return get_allocation_type() == C_HEAP; }
+  bool allocated_on_arena()             const { return get_allocation_type() == ARENA; }
 protected:
-  ResourceObj(); // default constructor
-  ResourceObj(const ResourceObj& r); // default copy constructor
-  ResourceObj& operator=(const ResourceObj& r); // default copy assignment
-  ~ResourceObj();
+  ResourceObj();
+  ResourceObj(const ResourceObj&);
+  ResourceObj& operator=(const ResourceObj& r);
 #endif // ASSERT
 
  public:
@@ -424,13 +474,13 @@ protected:
 
   void* operator new(size_t size) throw() {
       address res = (address)resource_allocate_bytes(size);
-      DEBUG_ONLY(set_allocation_type(res, RESOURCE_AREA);)
+      DEBUG_ONLY(_recent_allocations.set_type(res, size, RESOURCE_AREA);)
       return res;
   }
 
   void* operator new(size_t size, const std::nothrow_t& nothrow_constant) throw() {
       address res = (address)resource_allocate_bytes(size, AllocFailStrategy::RETURN_NULL);
-      DEBUG_ONLY(if (res != NULL) set_allocation_type(res, RESOURCE_AREA);)
+      DEBUG_ONLY(if (res != NULL) _recent_allocations.set_type(res, size, RESOURCE_AREA);)
       return res;
   }
 
