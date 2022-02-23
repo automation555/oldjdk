@@ -3045,7 +3045,6 @@ public:
   INSN(sve_and,  0b00000100, 0b011010000); // vector and
   INSN(sve_andv, 0b00000100, 0b011010001); // bitwise and reduction to scalar
   INSN(sve_asr,  0b00000100, 0b010000100); // vector arithmetic shift right
-  INSN(sve_bic,  0b00000100, 0b011011000); // vector bitwise clear
   INSN(sve_cnt,  0b00000100, 0b011010101); // count non-zero bits
   INSN(sve_cpy,  0b00000101, 0b100000100); // copy scalar to each active vector element
   INSN(sve_eor,  0b00000100, 0b011001000); // vector eor
@@ -3660,9 +3659,19 @@ void sve_cmp(Condition cond, PRegister Pd, SIMD_RegVariant T,
   INSN(sve_lastb, 0b1);
 #undef INSN
 
+  // SVE Create index starting from general-purpose register and incremented by immediate
+  void sve_index(FloatRegister Zd, SIMD_RegVariant T, Register Rn, int imm) {
+    starti;
+    assert(T != Q, "invalid size");
+    f(0b00000100, 31, 24), f(T, 23, 22), f(0b1, 21);
+    sf(imm, 20, 16), f(0b010001, 15, 10);
+    rf(Rn, 5), rf(Zd, 0);
+  }
+
   // SVE create index starting from and incremented by immediate
   void sve_index(FloatRegister Zd, SIMD_RegVariant T, int imm1, int imm2) {
     starti;
+    assert(T != Q, "invalid size");
     f(0b00000100, 31, 24), f(T, 23, 22), f(0b1, 21);
     sf(imm2, 20, 16), f(0b010000, 15, 10);
     sf(imm1, 9, 5), rf(Zd, 0);

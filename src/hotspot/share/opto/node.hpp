@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -149,6 +149,7 @@ class PhaseTransform;
 class PhaseValues;
 class PhiNode;
 class Pipeline;
+class PopulateIndexNode;
 class ProjNode;
 class RangeCheckNode;
 class RegMask;
@@ -1084,8 +1085,6 @@ public:
   Node* find_similar(int opc);
 
   // Return the unique control out if only one. Null if none or more than one.
-  Node* unique_ctrl_out_or_null() const;
-  // Return the unique control out. Asserts if none or more than one control out.
   Node* unique_ctrl_out() const;
 
   // Set control or add control as precedence edge
