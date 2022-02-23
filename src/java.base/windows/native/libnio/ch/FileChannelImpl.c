@@ -32,6 +32,7 @@
 #include "nio_util.h"
 #include "sun_nio_ch_FileChannelImpl.h"
 #include "java_lang_Integer.h"
+#include "java_lang_Long.h"
 
 #include <Mswsock.h>
 #pragma comment(lib, "Mswsock.lib")
@@ -193,9 +194,60 @@ Java_sun_nio_ch_FileChannelImpl_transferTo0(JNIEnv *env, jobject this,
     return chunkSize;
 }
 
-
-JNIEXPORT jint JNICALL
+JNIEXPORT jlong JNICALL
 Java_sun_nio_ch_FileChannelImpl_maxDirectTransferSize0(JNIEnv* env, jobject this)
 {
-    return MAX_TRANSMIT_SIZE;
+    return java_lang_Long_MAX_VALUE;
+}
+
+#define READ_WRITE_TRANSFER_SIZE  32768
+#define READ_WRITE_TRANSFER_LIMIT 2097152
+
+DWORD transfer_read_write(JNIEnv* env, HANDLE src, DWORD position, DWORD count,
+                          HANDLE dst)
+{
+    LARGE_INTEGER where;
+    where.QuadPart = (LONGLONG)position;
+    if (SetFilePointerEx(src, where, &where, FILE_BEGIN) == 0) {
+        JNU_ThrowIOExceptionWithLastError(env, "SetFilePointerEx failed");
+        return IOS_THROWN;
+    }
+
+    char buf[READ_WRITE_TRANSFER_SIZE];
+
+    DWORD tw = 0;
+    while (tw < count) {
+        DWORD remaining = count - tw;
+        DWORD nr = remaining < READ_WRITE_TRANSFER_SIZE ?
+            remaining : READ_WRITE_TRANSFER_SIZE;
+        if (ReadFile(src, (LPVOID)&buf, nr, &nr, NULL) == 0 || nr <= 0)
+            break;
+
+        DWORD nw = 0;
+        if (WriteFile(dst, &buf, nr, &nw, NULL) == 0)
+            break;
+        tw += nw;
+        if (nw != nr)
+            break;
+    }
+
+    return tw;
+}
+
+JNIEXPORT jlong JNICALL
+Java_sun_nio_ch_FileChannelImpl_transferToFileChannel0(JNIEnv *env,
+                                                       jobject this,
+                                                       jobject srcFDO,
+                                                       jlong position,
+                                                       jlong count,
+                                                       jobject dstFDO)
+{
+      HANDLE src = (HANDLE)(handleval(env, srcFDO));
+      HANDLE dst = (HANDLE)(handleval(env, dstFDO));
+
+      if (src != dst && count < READ_WRITE_TRANSFER_LIMIT)
+          return transfer_read_write(env, src, (DWORD)position, (DWORD)count,
+                                     dst);
+
+      return IOS_UNSUPPORTED_CASE;
 }

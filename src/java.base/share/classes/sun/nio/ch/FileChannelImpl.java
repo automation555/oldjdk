@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -66,7 +66,7 @@ public class FileChannelImpl
         SharedSecrets.getJavaIOFileDescriptorAccess();
 
     // Maximum direct transfer size
-    private static final int MAX_DIRECT_TRANSFER_SIZE;
+    private static final long MAX_DIRECT_TRANSFER_SIZE;
 
     // Used to make native read and write calls
     private final FileDispatcher nd;
@@ -489,7 +489,7 @@ public class FileChannelImpl
     //
     private static volatile boolean fileSupported = true;
 
-    private long transferToDirectlyInternal(long position, int icount,
+    private long transferToDirectlyInternal(long position, long count,
                                             WritableByteChannel target,
                                             FileDescriptor targetFD)
         throws IOException
@@ -505,7 +505,7 @@ public class FileChannelImpl
             if (!isOpen())
                 return -1;
             do {
-                n = transferTo0(fd, position, icount, targetFD);
+                n = transferTo0(fd, position, count, targetFD);
             } while ((n == IOStatus.INTERRUPTED) && isOpen());
             if (n == IOStatus.UNSUPPORTED_CASE) {
                 if (target instanceof SinkChannelImpl)
@@ -526,7 +526,7 @@ public class FileChannelImpl
         }
     }
 
-    private long transferToDirectly(long position, int icount,
+    private long transferToDirectly(long position, long count,
                                     WritableByteChannel target)
         throws IOException
     {
@@ -563,14 +563,72 @@ public class FileChannelImpl
             synchronized (positionLock) {
                 long pos = position();
                 try {
-                    return transferToDirectlyInternal(position, icount,
+                    return transferToDirectlyInternal(position, count,
                                                       target, targetFD);
                 } finally {
                     position(pos);
                 }
             }
         } else {
-            return transferToDirectlyInternal(position, icount, target, targetFD);
+            return transferToDirectlyInternal(position, count, target, targetFD);
+        }
+    }
+
+    // Assume that the underlying kernel supports a fast file copying
+    // function such as copy_file_range(2) (Linux) or fcopyfile(3) (macOS);
+    // set this to false if we find out later that it doesn't
+    //
+    private static volatile boolean transferToFileChannelSupported = true;
+
+    private long transferToFileChannelInternal(long position, long count,
+                                               FileChannelImpl target,
+                                               FileDescriptor targetFD)
+        throws IOException
+    {
+        assert !nd.transferToFileChannelNeedsPositionLock() ||
+               Thread.holdsLock(positionLock);
+
+        long n = -1;
+        int ti = -1;
+        try {
+            beginBlocking();
+            ti = threads.add();
+            if (!isOpen())
+                return -1;
+            do {
+                n = transferToFileChannel0(fd, position, count, targetFD);
+            } while ((n == IOStatus.INTERRUPTED) && isOpen());
+            if (n == IOStatus.UNSUPPORTED) {
+                // Don't bother trying again
+                transferToFileChannelSupported = false;
+            }
+            return IOStatus.normalize(n);
+        } finally {
+            threads.remove(ti);
+            end (n > -1);
+        }
+    }
+
+    private long transferToFileChannel(long position, long count,
+                                       FileChannelImpl target)
+        throws IOException
+    {
+        if (!transferToFileChannelSupported)
+            return IOStatus.UNSUPPORTED;
+
+        if (nd.transferToFileChannelNeedsPositionLock()) {
+            synchronized (positionLock) {
+                long pos = position();
+                try {
+                    return transferToFileChannelInternal(position, count,
+                                                         target, target.fd);
+                } finally {
+                    position(pos);
+                }
+            }
+        } else {
+            return transferToFileChannelInternal(position, count,
+                                                 target, target.fd);
         }
     }
 
@@ -690,10 +748,15 @@ public class FileChannelImpl
 
         // Attempt a direct transfer, if the kernel supports it, limiting
         // the number of bytes according to which platform
-        int icount = (int)Math.min(count, MAX_DIRECT_TRANSFER_SIZE);
+        long dcount = Math.min(count, MAX_DIRECT_TRANSFER_SIZE);
         long n;
-        if ((n = transferToDirectly(position, icount, target)) >= 0)
+        if ((n = transferToDirectly(position, dcount, target)) >= 0)
             return n;
+
+        // Attempt a transfer using native functions, if available
+        if (target instanceof FileChannelImpl targetFCI)
+            if ((n = transferToFileChannel(position, count, targetFCI)) >= 0)
+                return n;
 
         // Attempt a mapped transfer, but only to trusted channel types
         if ((n = transferToTrustedChannel(position, count, target)) >= 0)
@@ -888,7 +951,7 @@ public class FileChannelImpl
 
     // -- Memory-mapped buffers --
 
-    private abstract static class Unmapper
+    private static abstract class Unmapper
         implements Runnable, UnmapperProxy
     {
         // may be required to close file
@@ -1271,8 +1334,6 @@ public class FileChannelImpl
             throw new NonReadableChannelException();
         if (!shared && !writable)
             throw new NonWritableChannelException();
-        if (size == 0)
-            size = Long.MAX_VALUE - Math.max(0, position);
         FileLockImpl fli = new FileLockImpl(this, position, size, shared);
         FileLockTable flt = fileLockTable();
         flt.add(fli);
@@ -1318,8 +1379,6 @@ public class FileChannelImpl
             throw new NonReadableChannelException();
         if (!shared && !writable)
             throw new NonWritableChannelException();
-        if (size == 0)
-            size = Long.MAX_VALUE - Math.max(0, position);
         FileLockImpl fli = new FileLockImpl(this, position, size, shared);
         FileLockTable flt = fileLockTable();
         flt.add(fli);
@@ -1372,12 +1431,19 @@ public class FileChannelImpl
     // Removes an existing mapping
     private static native int unmap0(long address, long length);
 
-    // Transfers from src to dst, or returns -2 if kernel can't do that
-    private native long transferTo0(FileDescriptor src, long position,
-                                    long count, FileDescriptor dst);
+    // Transfers from src to dst, or returns IOStatus.UNSUPPORTED (-4)
+    // or IOStatus.UNSUPPORTED_CASE (-6) if kernel can't do that
+    private static native long transferTo0(FileDescriptor src, long position,
+                                           long count, FileDescriptor dst);
 
     // Retrieves the maximum size of a transfer
-    private static native int maxDirectTransferSize0();
+    private static native long maxDirectTransferSize0();
+
+    // Transfers from src to dst, or returns IOStatus.UNSUPPORTED (-4)
+    // or IOStatus.UNSUPPORTED_CASE (-6) if kernel can't do that
+    private static native long transferToFileChannel0(FileDescriptor src,
+                                                      long position, long count,
+                                                      FileDescriptor dst);
 
     // Caches fieldIDs
     private static native long initIDs();
