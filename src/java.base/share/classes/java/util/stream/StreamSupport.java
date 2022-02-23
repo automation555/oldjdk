@@ -26,6 +26,7 @@ package java.util.stream;
 
 import java.util.Objects;
 import java.util.Spliterator;
+import java.util.Spliterators;
 import java.util.function.Supplier;
 
 /**
@@ -314,5 +315,50 @@ public final class StreamSupport {
         return new DoublePipeline.Head<>(supplier,
                                          StreamOpFlag.fromCharacteristics(characteristics),
                                          parallel);
+    }
+
+    /**
+     * Creates a new sequential empty {@code Stream} with the
+     * characteristics of the provided {@code Spliterator}.
+     *
+     * @param <T> the type of stream elements
+     * @param spliterator a {@code Spliterator} describing the stream elements
+     * @return a new sequential empty {@code Stream}
+     */
+    public static <T> Stream<T> emptyStream(Spliterator<T> spliterator) {
+        return new Streams.EmptyStream<>(spliterator);
+    }
+
+    /**
+     * Creates a new sequential empty {@code IntStream} with the
+     * characteristics of the provided {@code Spliterator}.
+     *
+     * @param spliterator a {@code Spliterator.OfInt} describing the stream elements
+     * @return a new sequential empty {@code IntStream}
+     */
+    public static IntStream emptyIntStream(Spliterator.OfInt spliterator) {
+        return new Streams.EmptyIntStream(spliterator);
+    }
+
+    /**
+     * Creates a new sequential empty {@code LongStream} with the
+     * characteristics of the provided {@code Spliterator}.
+     *
+     * @param spliterator a {@code Spliterator.OfLong} describing the stream elements
+     * @return a new sequential empty {@code IntStream}
+     */
+    public static LongStream emptyLongStream(Spliterator.OfLong spliterator) {
+        return new Streams.EmptyLongStream(spliterator);
+    }
+
+    /**
+     * Creates a new sequential empty {@code DoubleStream} with the
+     * characteristics of the provided {@code Spliterator}.
+     *
+     * @param spliterator a {@code Spliterator.OfDouble} describing the stream elements
+     * @return a new sequential empty {@code DoubleStream}
+     */
+    public static DoubleStream emptyDoubleStream(Spliterator.OfDouble spliterator) {
+        return new Streams.EmptyDoubleStream(spliterator);
     }
 }

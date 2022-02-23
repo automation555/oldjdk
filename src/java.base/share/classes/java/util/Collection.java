@@ -740,7 +740,9 @@ public interface Collection<E> extends Iterable<E> {
      * @since 1.8
      */
     default Stream<E> stream() {
-        return StreamSupport.stream(spliterator(), false);
+        var spliterator = spliterator();
+        if (isEmpty()) return StreamSupport.emptyStream(spliterator);
+        return StreamSupport.stream(spliterator, false);
     }
 
     /**
