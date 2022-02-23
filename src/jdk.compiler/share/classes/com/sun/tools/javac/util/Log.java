@@ -28,7 +28,6 @@ package com.sun.tools.javac.util;
 import java.io.*;
 import java.util.Arrays;
 import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Queue;
@@ -90,7 +89,7 @@ public class Log extends AbstractLog {
      * Note that javax.tools.DiagnosticListener (if set) is called later in the
      * diagnostic pipeline.
      */
-    public abstract static class DiagnosticHandler {
+    public static abstract class DiagnosticHandler {
         /**
          * The previously installed diagnostic handler.
          */
@@ -213,11 +212,6 @@ public class Log extends AbstractLog {
      * Keys for expected diagnostics.
      */
     public Set<String> expectDiagKeys;
-
-    /**
-     * Set to true if a compressed diagnostic is reported
-     */
-    public boolean compressedOutput;
 
     /**
      * JavacMessages object used for localization.
@@ -671,6 +665,10 @@ public class Log extends AbstractLog {
             if (expectDiagKeys != null)
                 expectDiagKeys.remove(diagnostic.getCode());
 
+            if (diagnostic.hasRewriter()) {
+                diagnostic = diagnostic.rewrite();
+            }
+
             switch (diagnostic.getType()) {
             case FRAGMENT:
                 throw new IllegalArgumentException();
@@ -706,9 +704,6 @@ public class Log extends AbstractLog {
                     }
                 }
                 break;
-            }
-            if (diagnostic.isFlagSet(JCDiagnostic.DiagnosticFlag.COMPRESSED)) {
-                compressedOutput = true;
             }
         }
     }
