@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -378,7 +378,9 @@ public class AquaInternalFrameBorder implements Border, UIResource {
         final int x = inX;
         final int y = inY;
         final int w = inW;
-        final int h = inH;
+        int h = inH;
+
+        h = metrics.titleBarHeight + inH;
 
         // paint the background
         titleBarPainter.state.set(frame.isSelected() ? State.ACTIVE : State.INACTIVE);
@@ -416,20 +418,18 @@ public class AquaInternalFrameBorder implements Border, UIResource {
         if (fBorderInsets == null) fBorderInsets = new Insets(0, 0, 0, 0);
 
         // Paranoia check
-        if (!(c instanceof JInternalFrame)) return fBorderInsets;
+        if (c instanceof final JInternalFrame frame) {
+            // Set the contentRect to an arbitrary value (in case the current real one is too small)
+            setInBounds(0, 0, kContentTester, kContentTester);
 
-        final JInternalFrame frame = (JInternalFrame)c;
+            // Set parameters
+            setMetrics(frame, c);
 
-        // Set the contentRect to an arbitrary value (in case the current real one is too small)
-        setInBounds(0, 0, kContentTester, kContentTester);
-
-        // Set parameters
-        setMetrics(frame, c);
-
-        fBorderInsets.left = 0;
-        fBorderInsets.top = metrics.titleBarHeight;
-        fBorderInsets.right = 0;
-        fBorderInsets.bottom = 0;
+            fBorderInsets.left = 0;
+            fBorderInsets.top = metrics.titleBarHeight;
+            fBorderInsets.right = 0;
+            fBorderInsets.bottom = 0;
+        }
 
         return fBorderInsets;
     }

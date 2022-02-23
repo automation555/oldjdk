@@ -220,8 +220,8 @@ public class TrueTypeFont extends FileFont {
             }
         } catch (Throwable t) {
             close();
-            if (t instanceof FontFormatException) {
-                throw (FontFormatException)t;
+            if (t instanceof FontFormatException e) {
+                throw e;
             } else {
                 throw new FontFormatException("Unexpected runtime exception.");
             }
@@ -257,9 +257,8 @@ public class TrueTypeFont extends FileFont {
                 disposerRecord.channel = raf.getChannel();
                 fileSize = (int)disposerRecord.channel.size();
                 if (usePool) {
-                    FontManager fm = FontManagerFactory.getInstance();
-                    if (fm instanceof SunFontManager) {
-                        ((SunFontManager) fm).addToPool(this);
+                    if (FontManagerFactory.getInstance() instanceof SunFontManager sfm) {
+                        sfm.addToPool(this);
                     }
                 }
             } catch (PrivilegedActionException e) {
@@ -503,9 +502,7 @@ public class TrueTypeFont extends FileFont {
                 /* checksum */ ibuffer.get();
                 table.offset = ibuffer.get() & 0x7FFFFFFF;
                 table.length = ibuffer.get() & 0x7FFFFFFF;
-                if ((table.offset + table.length < table.length) ||
-                    (table.offset + table.length > fileSize))
-                {
+                if (table.offset + table.length > fileSize) {
                     throw new FontFormatException("bad table, tag="+table.tag);
                 }
             }
@@ -529,8 +526,8 @@ public class TrueTypeFont extends FileFont {
             if (FontUtilities.isLogging()) {
                 FontUtilities.logSevere(e.toString());
             }
-            if (e instanceof FontFormatException) {
-                throw (FontFormatException)e;
+            if (e instanceof FontFormatException ex) {
+                throw ex;
             } else {
                 throw new FontFormatException(e.toString());
             }
@@ -800,11 +797,8 @@ public class TrueTypeFont extends FileFont {
                 break;
             }
         }
-
         if (entry == null || entry.length == 0 ||
-            (entry.offset + entry.length < entry.length) ||
-            (entry.offset + entry.length > fileSize))
-        {
+            entry.offset+entry.length > fileSize) {
             return null;
         }
 
@@ -893,9 +887,6 @@ public class TrueTypeFont extends FileFont {
             return false;
         }
         ByteBuffer eblcTable = getTableBuffer(EBLCTag);
-        if (eblcTable == null) {
-            return false;
-        }
         int numSizes = eblcTable.getInt(4);
         /* The bitmapSizeTable's start at offset of 8.
          * Each bitmapSizeTable entry is 48 bytes.

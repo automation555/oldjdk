@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -303,10 +303,11 @@ public final class LWCToolkit extends LWToolkit {
 
     @Override
     public DialogPeer createDialog(Dialog target) {
-        if (target instanceof CPrinterDialog) {
-            return createCPrinterDialog((CPrinterDialog)target);
+        if (target instanceof CPrinterDialog printerDialog) {
+            return createCPrinterDialog(printerDialog);
+        } else {
+            return super.createDialog(target);
         }
-        return super.createDialog(target);
     }
 
     @Override
@@ -453,7 +454,7 @@ public final class LWCToolkit extends LWToolkit {
         desktopProperties.put("awt.multiClickInterval", getMultiClickTime());
 
         // These DnD properties must be set, otherwise Swing ends up spewing NPEs
-        // all over the place. The values came straight off of XToolkit.
+        // all over the place. The values came straight off of MToolkit.
         desktopProperties.put("DnD.Autoscroll.initialDelay", Integer.valueOf(50));
         desktopProperties.put("DnD.Autoscroll.interval", Integer.valueOf(50));
         desktopProperties.put("DnD.Autoscroll.cursorHysteresis", Integer.valueOf(5));
@@ -496,11 +497,11 @@ public final class LWCToolkit extends LWToolkit {
 
     @Override
     public Insets getScreenInsets(final GraphicsConfiguration gc) {
-        GraphicsDevice gd = gc.getDevice();
-        if (!(gd instanceof CGraphicsDevice)) {
+        if (gc.getDevice() instanceof CGraphicsDevice cgd) {
+            return cgd.getScreenInsets();
+        } else {
             return super.getScreenInsets(gc);
         }
-        return ((CGraphicsDevice)gd).getScreenInsets();
     }
 
     @Override
@@ -518,10 +519,11 @@ public final class LWCToolkit extends LWToolkit {
 
     @Override
     public RobotPeer createRobot(GraphicsDevice screen) throws AWTException {
-        if (screen instanceof CGraphicsDevice) {
-            return new CRobot((CGraphicsDevice) screen);
+        if (screen instanceof CGraphicsDevice device) {
+            return new CRobot(device);
+        } else {
+            return super.createRobot(screen);
         }
-        return super.createRobot(screen);
     }
 
     private native boolean isCapsLockOn();
@@ -764,8 +766,8 @@ public final class LWCToolkit extends LWToolkit {
         Throwable eventException = event.getException();
         if (eventException == null) return;
 
-        if (eventException instanceof UndeclaredThrowableException) {
-            eventException = ((UndeclaredThrowableException)eventException).getUndeclaredThrowable();
+        if (eventException instanceof UndeclaredThrowableException e) {
+            eventException = e.getUndeclaredThrowable();
         }
         throw new InvocationTargetException(eventException);
     }
