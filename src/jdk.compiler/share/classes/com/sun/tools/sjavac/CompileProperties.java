@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,7 +31,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.io.PrintStream;
 import java.io.Writer;
 import java.net.URI;
 import java.text.MessageFormat;
@@ -109,8 +108,8 @@ public class CompileProperties implements Transformer {
         }
         // Load the properties file.
         Properties p = new Properties();
-        try {
-            p.load(new FileInputStream(src));
+        try (FileInputStream fis = new FileInputStream(src)) {
+            p.load(fis);
         } catch (IOException e) {
             Log.error("Error reading file "+src.getPath());
             return false;
