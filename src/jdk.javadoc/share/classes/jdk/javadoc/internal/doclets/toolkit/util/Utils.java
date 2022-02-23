@@ -159,27 +159,22 @@ public class Utils {
     }
 
     // our own little symbol table
-    private HashMap<String, TypeMirror> symtab = new HashMap<>();
+    private final Map<String, TypeMirror> symtab = new HashMap<>();
 
     public TypeMirror getSymbol(String signature) {
-        TypeMirror type = symtab.get(signature);
-        if (type == null) {
-            TypeElement typeElement = elementUtils.getTypeElement(signature);
-            if (typeElement == null)
-                return null;
-            type = typeElement.asType();
-            if (type == null)
-                return null;
-            symtab.put(signature, type);
-        }
-        return type;
+        return symtab.computeIfAbsent(signature, s -> {
+            var typeElement = elementUtils.getTypeElement(s);
+            return typeElement == null ? null : typeElement.asType();
+        });
     }
 
     public TypeMirror getObjectType() {
         return getSymbol("java.lang.Object");
     }
 
-    public TypeMirror getThrowableType() { return getSymbol("java.lang.Throwable"); }
+    public TypeMirror getThrowableType() {
+        return getSymbol("java.lang.Throwable");
+    }
 
     public TypeMirror getSerializableType() {
         return getSymbol("java.io.Serializable");
@@ -261,20 +256,14 @@ public class Utils {
             List<? extends VariableElement> parameters2 = e2.getParameters();
             if (e1.getSimpleName().equals(e2.getSimpleName()) &&
                     parameters1.size() == parameters2.size()) {
-                int j;
-                for (j = 0 ; j < parameters1.size(); j++) {
+                for (int j = 0; j < parameters1.size(); j++) {
                     VariableElement v1 = parameters1.get(j);
                     VariableElement v2 = parameters2.get(j);
-                    String t1 = getTypeName(v1.asType(), true);
-                    String t2 = getTypeName(v2.asType(), true);
-                    if (!(t1.equals(t2) ||
-                            isTypeVariable(v1.asType()) || isTypeVariable(v2.asType()))) {
-                        break;
+                    if (!typeUtils.isSameType(v1.asType(), v2.asType())) {
+                        return false;
                     }
                 }
-                if (j == parameters1.size()) {
-                    return true;
-                }
+                return true;
             }
             return false;
         } else {
@@ -718,7 +707,7 @@ public class Utils {
     }
 
     public boolean ignoreBounds(TypeMirror bound) {
-        return bound.equals(getObjectType()) && !isAnnotated(bound);
+        return typeUtils.isSameType(bound, getObjectType()) && !isAnnotated(bound);
     }
 
     /*
@@ -783,9 +772,14 @@ public class Utils {
                !((DeclaredType)e.getEnclosingElement().asType()).getTypeArguments().isEmpty();
     }
 
-    /**
-     * Return the type containing the method that this method overrides.
-     * It may be a {@code TypeElement} or a {@code TypeParameterElement}.
+    /*
+     * Returns the closest supertype (TypeElement) that contains a method that
+     * is both:
+     *
+     *   - overridden by the specified method, and
+     *   - is not itself a *simple* override
+     *
+     * If no such type can be found, returns null.
      */
     public TypeMirror overriddenType(ExecutableElement method) {
         return configuration.workArounds.overriddenType(method);
@@ -820,8 +814,8 @@ public class Utils {
         }
         final TypeElement origin = getEnclosingTypeElement(method);
         for (TypeMirror t = getSuperType(origin);
-                t.getKind() == DECLARED;
-                t = getSuperType(asTypeElement(t))) {
+             t.getKind() == DECLARED;
+             t = getSuperType(asTypeElement(t))) {
             TypeElement te = asTypeElement(t);
             if (te == null) {
                 return null;
@@ -834,7 +828,7 @@ public class Utils {
                     return ee;
                 }
             }
-            if (t.equals(getObjectType()))
+            if (typeUtils.isSameType(t, getObjectType()))
                 return null;
         }
         return null;
@@ -924,7 +918,7 @@ public class Utils {
         List<? extends TypeMirror> intfacs = typeUtils.directSupertypes(type);
         TypeMirror superType = null;
         for (TypeMirror intfac : intfacs) {
-            if (intfac == getObjectType())
+            if (typeUtils.isSameType(intfac, getObjectType()))
                 continue;
             TypeElement e = asTypeElement(intfac);
             if (isInterface(e)) {
@@ -1176,8 +1170,7 @@ public class Utils {
     }
 
     public TypeElement getSuperClass(TypeElement te) {
-        if (isInterface(te) || isAnnotationType(te) ||
-                te.asType().equals(getObjectType())) {
+        if (checkType(te)) {
             return null;
         }
         TypeMirror superclass = te.getSuperclass();
@@ -1187,9 +1180,13 @@ public class Utils {
         return asTypeElement(superclass);
     }
 
+    private boolean checkType(TypeElement te) {
+        return isInterface(te) || typeUtils.isSameType(te.asType(), getObjectType())
+                || isAnnotationType(te);
+    }
+
     public TypeElement getFirstVisibleSuperClassAsTypeElement(TypeElement te) {
-        if (isAnnotationType(te) || isInterface(te) ||
-                te.asType().equals(getObjectType())) {
+        if (checkType(te)) {
             return null;
         }
         TypeMirror firstVisibleSuperClass = getFirstVisibleSuperClass(te);
@@ -1202,7 +1199,6 @@ public class Utils {
      * @return  the closest visible super class.  Return null if it cannot
      *          be found.
      */
-
     public TypeMirror getFirstVisibleSuperClass(TypeMirror type) {
         return getFirstVisibleSuperClass(asTypeElement(type));
     }
@@ -1213,7 +1209,7 @@ public class Utils {
      *
      * @param te the TypeElement to be interrogated
      * @return the closest visible super class.  Return null if it cannot
-     *         be found..
+     *         be found.
      */
     public TypeMirror getFirstVisibleSuperClass(TypeElement te) {
         TypeMirror superType = te.getSuperclass();
@@ -1233,7 +1229,7 @@ public class Utils {
             superType = supersuperType;
             superClass = supersuperClass;
         }
-        if (te.asType().equals(superType)) {
+        if (typeUtils.isSameType(te.asType(), superType)) {
             return null;
         }
         return superType;
@@ -1481,10 +1477,14 @@ public class Utils {
         return hasBlockTag(e, DocTree.Kind.HIDDEN);
     }
 
-    /**
-     * Returns true if the method has no comments, or a lone &commat;inheritDoc.
-     * @param m a method
-     * @return true if there are no comments, false otherwise
+    /*
+     * Returns true if the passed method does not change the specification it
+     * inherited.
+     *
+     * If the passed method is not deprecated and has either no comment or a
+     * comment consisting of single {@inheritDoc} tag, the inherited
+     * specification is deemed unchanged and this method returns true;
+     * otherwise this method returns false.
      */
     public boolean isSimpleOverride(ExecutableElement m) {
         if (!options.summarizeOverriddenMethods() || !isIncluded(m)) {
@@ -2592,7 +2592,7 @@ public class Utils {
 
     /**
      * A cache of doc comment info objects for elements.
-     * The entries may come from the AST and DocCommentParser, or may be autromatically
+     * The entries may come from the AST and DocCommentParser, or may be automatically
      * generated comments for mandated elements and JavaFX properties.
      *
      * @see CommentUtils#dcInfoMap
@@ -3053,11 +3053,9 @@ public class Utils {
      */
     public boolean isPreviewAPI(Element el) {
         boolean parentPreviewAPI = false;
-        if (!isClassOrInterface(el)) {
-            Element enclosing = el.getEnclosingElement();
-            if (isClassOrInterface(enclosing)) {
-                parentPreviewAPI = configuration.workArounds.isPreviewAPI(enclosing);
-            }
+        Element enclosing = el.getEnclosingElement();
+        if (enclosing != null && (enclosing.getKind().isClass() || enclosing.getKind().isInterface())) {
+            parentPreviewAPI = configuration.workArounds.isPreviewAPI(enclosing);
         }
         boolean previewAPI = configuration.workArounds.isPreviewAPI(el);
         return !parentPreviewAPI && previewAPI;
@@ -3084,12 +3082,18 @@ public class Utils {
      */
     public Set<ElementFlag> elementFlags(Element el) {
         Set<ElementFlag> flags = EnumSet.noneOf(ElementFlag.class);
+        PreviewSummary previewAPIs = declaredUsingPreviewAPIs(el);
 
         if (isDeprecated(el)) {
             flags.add(ElementFlag.DEPRECATED);
         }
 
-        if (previewFlagProvider.isPreview(el)) {
+        if ((!previewLanguageFeaturesUsed(el).isEmpty() ||
+             configuration.workArounds.isPreviewAPI(el) ||
+             !previewAPIs.previewAPI.isEmpty() ||
+             !previewAPIs.reflectivePreviewAPI.isEmpty() ||
+             !previewAPIs.declaredUsingPreviewFeature.isEmpty()) &&
+            !hasNoProviewAnnotation(el)) {
             flags.add(ElementFlag.PREVIEW);
         }
 
@@ -3105,42 +3109,9 @@ public class Utils {
         PREVIEW
     }
 
-    private boolean isClassOrInterface(Element el) {
-        return el != null && (el.getKind().isClass() || el.getKind().isInterface());
-    }
-
-    private boolean hasNoPreviewAnnotation(Element el) {
+    private boolean hasNoProviewAnnotation(Element el) {
         return el.getAnnotationMirrors()
                  .stream()
                  .anyMatch(am -> "jdk.internal.javac.NoPreview".equals(getQualifiedTypeName(am.getAnnotationType())));
     }
-
-    private PreviewFlagProvider previewFlagProvider = new PreviewFlagProvider() {
-        @Override
-        public boolean isPreview(Element el) {
-            PreviewSummary previewAPIs = declaredUsingPreviewAPIs(el);
-            Element enclosing = el.getEnclosingElement();
-
-            return    (   !previewLanguageFeaturesUsed(el).isEmpty()
-                       || configuration.workArounds.isPreviewAPI(el)
-                       || (   !isClassOrInterface(el) && isClassOrInterface(enclosing)
-                           && configuration.workArounds.isPreviewAPI(enclosing))
-                       || !previewAPIs.previewAPI.isEmpty()
-                       || !previewAPIs.reflectivePreviewAPI.isEmpty()
-                       || !previewAPIs.declaredUsingPreviewFeature.isEmpty())
-                   && !hasNoPreviewAnnotation(el);
-        }
-    };
-
-    public PreviewFlagProvider setPreviewFlagProvider(PreviewFlagProvider provider) {
-        Objects.requireNonNull(provider);
-        PreviewFlagProvider old = previewFlagProvider;
-        previewFlagProvider = provider;
-        return old;
-    }
-
-    public interface PreviewFlagProvider {
-        public boolean isPreview(Element el);
-    }
-
 }
