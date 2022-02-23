@@ -1401,13 +1401,16 @@ Node* LoadNode::eliminate_autobox(PhaseIterGVN* igvn) {
     if ((cache_base != NULL) && cache_base->is_Con()) {
       const TypeAryPtr* base_type = cache_base->bottom_type()->isa_aryptr();
       if ((base_type != NULL) && base_type->is_autobox_cache()) {
-        Node* elements[4];
+        Node* elements[2];
         int shift = exact_log2(type2aelembytes(T_OBJECT));
         int count = address->unpack_offsets(elements, ARRAY_SIZE(elements));
-        if (count > 0 && elements[0]->is_Con() &&
-            (count == 1 ||
-             (count == 2 && elements[1]->Opcode() == Op_LShiftX &&
-                            elements[1]->in(2) == igvn->intcon(shift)))) {
+        if (count != -1) {
+          assert(count <= 2, "malformed address expr");
+          assert(elements[0]->is_Con(), "malformed address expr");
+          if (count == 2) {
+            assert(elements[1]->Opcode() == Op_LShiftX &&  elements[1]->in(2) == igvn->intcon(shift),
+                  "malformed address expr");
+          }
           ciObjArray* array = base_type->const_oop()->as_obj_array();
           // Fetch the box object cache[0] at the base of the array and get its value
           ciInstance* box = array->obj_at(0)->as_instance();
@@ -1431,7 +1434,7 @@ Node* LoadNode::eliminate_autobox(PhaseIterGVN* igvn) {
             if (offset != (int)offset) {
               return NULL; // should not happen since cache is array indexed by value
             }
-           // Add up all the offsets making of the address of the load
+            // Add up all the offsets making of the address of the load
             Node* result = elements[0];
             for (int i = 1; i < count; i++) {
               result = igvn->transform(new AddXNode(result, elements[i]));
@@ -4752,6 +4755,29 @@ Node *MergeMemNode::Ideal(PhaseGVN *phase, bool can_reshape) {
   // the base memory might contribute new slices beyond my req()
   if (old_mbase)  grow_to_match(old_mbase);
 
+  // Look carefully at the base node if it is a phi.
+  PhiNode* phi_base;
+  if (new_base != NULL && new_base->is_Phi())
+    phi_base = new_base->as_Phi();
+  else
+    phi_base = NULL;
+
+  Node*    phi_reg = NULL;
+  uint     phi_len = (uint)-1;
+  if (phi_base != NULL) {
+    phi_reg = phi_base->region();
+    phi_len = phi_base->req();
+    // see if the phi is unfinished
+    for (uint i = 1; i < phi_len; i++) {
+      if (phi_base->in(i) == NULL) {
+        // incomplete phi; do not look at it yet!
+        phi_reg = NULL;
+        phi_len = (uint)-1;
+        break;
+      }
+    }
+  }
+
   // Note:  We do not call verify_sparse on entry, because inputs
   // can normalize to the base_memory via subsume_node or similar
   // mechanisms.  This method repairs that damage.
@@ -4952,6 +4978,7 @@ Node* MergeMemNode::memory_at(uint alias_idx) const {
 
   // Otherwise, it is a narrow slice.
   Node* n = alias_idx < req() ? in(alias_idx) : empty_memory();
+  Compile *C = Compile::current();
   if (is_empty_memory(n)) {
     // the array is sparse; empty slots are the "top" node
     n = base_memory();
