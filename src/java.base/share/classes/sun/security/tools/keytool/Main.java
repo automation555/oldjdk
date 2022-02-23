@@ -47,6 +47,8 @@ import java.security.interfaces.EdECKey;
 import java.security.spec.ECParameterSpec;
 import java.text.Collator;
 import java.text.MessageFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.function.BiFunction;
 import java.util.jar.JarEntry;
@@ -824,7 +826,9 @@ public final class Main {
         if (providerClasses != null) {
             ClassLoader cl = null;
             if (pathlist != null) {
-                String path = System.getProperty("java.class.path");
+                String path = null;
+                path = PathList.appendPath(
+                        path, System.getProperty("java.class.path"));
                 path = PathList.appendPath(
                         path, System.getProperty("env.class.path"));
                 path = PathList.appendPath(path, pathlist);
@@ -1286,6 +1290,7 @@ public final class Main {
             kssave = true;
         } else if (command == LIST) {
             if (storePass == null
+                    && !protectedPath
                     && !KeyStoreUtil.isWindowsKeyStore(storetype)
                     && !isPasswordlessKeyStore) {
                 printNoIntegrityWarning();
@@ -1685,6 +1690,7 @@ public final class Main {
         throws Exception
     {
         if (storePass == null
+                && !protectedPath
                 && !KeyStoreUtil.isWindowsKeyStore(storetype)
                 && !isPasswordlessKeyStore) {
             printNoIntegrityWarning();
@@ -4921,6 +4927,17 @@ public final class Main {
                         throw new Exception(rb.getString(
                                 "Unable.to.parse.denyAfter.string.in.exception.message"));
                     }
+
+                    SimpleDateFormat formatter = new SimpleDateFormat("EEE MMM dd HH:mm:ss Z yyyy");
+                    Date dateObj = null;
+                    try {
+                        dateObj = formatter.parse(denyAfterDate);
+                    } catch (ParseException e2) {
+                        throw new Exception(rb.getString(
+                                "Unable.to.parse.denyAfter.string.in.exception.message"));
+                    }
+                    formatter = new SimpleDateFormat("yyyy-MM-dd");
+                    denyAfterDate = formatter.format(dateObj);
 
                     weakWarnings.add(String.format(
                             rb.getString("whose.sigalg.usagesignedjar"), label, sigAlg,
