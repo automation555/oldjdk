@@ -68,6 +68,10 @@ import java.net.URL;
  * encountered, all whitespace will be ignored until a non whitespace
  * character is encountered. This appears to give behavior closer to
  * the popular browsers.
+ * <p>
+ * The tag parser does not support script tags. If a tag is encountered,
+ * an error will be logged. The script tags are removed, and contents inside
+ * the script tag will be handled by <code>handleComment</code>.
  *
  * @see DTD
  * @see TagElement
@@ -75,6 +79,7 @@ import java.net.URL;
  * @author Arthur van Hoff
  * @author Sunita Mani
  */
+@SuppressWarnings("doclint:missing")
 public
 class Parser implements DTDConstants {
 
@@ -210,8 +215,6 @@ class Parser implements DTDConstants {
 
 
     /**
-     * Returns the line number of the line currently being parsed.
-     *
      * @return the line number of the line currently being parsed
      */
     protected int getCurrentLine() {
