@@ -1499,7 +1499,7 @@ void C2_MacroAssembler::load_vector(XMMRegister dst, Address src, int vlen_in_by
   case 8:  movq(dst, src);    break;
   case 16: movdqu(dst, src);  break;
   case 32: vmovdqu(dst, src); break;
-  case 64: evmovdquq(dst, src, Assembler::AVX_512bit); break;
+  case 64: evmovdqul(dst, src, Assembler::AVX_512bit); break;
   default: ShouldNotReachHere();
   }
 }
@@ -1510,6 +1510,17 @@ void C2_MacroAssembler::load_vector(XMMRegister dst, AddressLiteral src, int vle
   } else {
     lea(rscratch, src);
     load_vector(dst, Address(rscratch, 0), vlen_in_bytes);
+  }
+}
+
+void C2_MacroAssembler::store_vector(Address dst, XMMRegister src, int vlen_in_bytes) {
+  switch (vlen_in_bytes) {
+  case 4:  movdl(dst, src);   break;
+  case 8:  movq(dst, src);    break;
+  case 16: movdqu(dst, src);  break;
+  case 32: vmovdqu(dst, src); break;
+  case 64: evmovdqul(dst, src, Assembler::AVX_512bit); break;
+  default: ShouldNotReachHere();
   }
 }
 
@@ -4014,6 +4025,87 @@ void C2_MacroAssembler::masked_op(int ideal_opc, int mask_len, KRegister dst,
 }
 
 /*
+ * Convert long vectors to floating-point vectors on non-AVX512dq
+ * The fast path downcasts the vector to an int vector to perform the
+ * cast; the slow path, where some elements can't be cast losslessly to
+ * int, tries to convert elements one by one.
+ */
+void C2_MacroAssembler::vector_castL2FD(XMMRegister dst, XMMRegister src, XMMRegister xtmp1, XMMRegister xtmp2,
+                                        Register tmp, KRegister ktmp, BasicType bt, int vlen, int vec_enc) {
+  Label slow_path;
+  Label slow_path_loop;
+  Label done;
+  assert((ktmp == knoreg) != (vlen == 8), "");
+  assert(bt == T_FLOAT || bt == T_DOUBLE, "");
+
+  if (vec_enc == AVX_128bit) {
+    vpshufd(xtmp1, src, 0x08, vec_enc);
+  } else if (UseAVX > 2) {
+    evpmovqd(xtmp1, src, VM_Version::supports_avx512vl() ? vec_enc : AVX_512bit);
+  } else {
+    vpshufd(xtmp1, src, 0x08, vec_enc);
+    vpermq(xtmp1, xtmp1, 0x08, vec_enc);
+  }
+
+  vpmovsxdq(xtmp2, xtmp1, vec_enc);
+  if (vec_enc == AVX_512bit) {
+    evpcmp(T_LONG, ktmp, k0, src, xtmp2, Assembler::eq, vec_enc);
+    kmov(tmp, ktmp);
+  } else {
+    vpcmpeqq(xtmp2, src, xtmp2, vec_enc);
+    vmovmskpd(tmp, xtmp2, vec_enc);
+  }
+  if (vlen == 1) {
+    testl(tmp, 1);
+    jccb(Assembler::zero, slow_path);
+  } else {
+    cmp32(tmp, (1 << vlen) - 1);
+    jccb(Assembler::notEqual, slow_path);
+  }
+
+  // fast path
+  if (bt == T_FLOAT) {
+    vcvtdq2ps(dst, xtmp1, vec_enc == AVX_512bit ? AVX_256bit : AVX_128bit);
+  } else {
+    vcvtdq2pd(dst, xtmp1, vec_enc);
+  }
+  jmp(done);
+
+  bind(slow_path);
+  subptr(rsp, vlen * (type2aelembytes(T_LONG) + type2aelembytes(bt)));
+  store_vector(Address(rsp, 0), src, vlen * type2aelembytes(T_LONG));
+  movl(tmp, vlen);
+
+  Address src_ele(rsp, tmp, Address::times_8, -type2aelembytes(T_LONG));
+  Address dst_ele(rsp, tmp, bt == T_FLOAT ? Address::times_4 : Address::times_8, vlen * type2aelembytes(T_LONG) - type2aelembytes(bt));
+  bind(slow_path_loop);
+#ifdef _LP64
+  if (bt == T_FLOAT) {
+    cvtsi2ssq(xtmp1, src_ele);
+    movflt(dst_ele, xtmp1);
+  } else {
+    cvtsi2sdq(xtmp1, src_ele);
+    movdbl(dst_ele, xtmp1);
+  }
+#else // _LP64
+  if (bt == T_FLOAT) {
+    fild_d(src_ele);
+    fstp_s(dst_ele);
+  } else {
+    fild_d(src_ele);
+    fstp_d(dst_ele);
+  }
+#endif // _LP64
+  decl(tmp);
+  jccb(Assembler::notZero, slow_path_loop);
+
+  load_vector(dst, Address(rsp, vlen * type2aelembytes(T_LONG)), vlen * type2aelembytes(bt));
+  addptr(rsp, vlen * (type2aelembytes(T_LONG) + type2aelembytes(bt)));
+
+  bind(done);
+}
+
+/*
  * Algorithm for vector D2L and F2I conversions:-
  * a) Perform vector D2L/F2I cast.
  * b) Choose fast path if none of the result vector lane contains 0x80000000 value.
@@ -4092,33 +4184,6 @@ void C2_MacroAssembler::vector_castF2I_evex(XMMRegister dst, XMMRegister src, XM
   vpternlogd(xtmp2, 0x11, xtmp1, xtmp1, vec_enc);
   evmovdqul(dst, ktmp1, xtmp2, true, vec_enc);
   bind(done);
-}
-
-void C2_MacroAssembler::vector_unsigned_cast(XMMRegister dst, XMMRegister src, int vlen_enc,
-                                             BasicType from_elem_bt, BasicType to_elem_bt) {
-  switch (from_elem_bt) {
-    case T_BYTE:
-      switch (to_elem_bt) {
-        case T_SHORT: vpmovzxbw(dst, src, vlen_enc); break;
-        case T_INT:   vpmovzxbd(dst, src, vlen_enc); break;
-        case T_LONG:  vpmovzxbq(dst, src, vlen_enc); break;
-        default: ShouldNotReachHere();
-      }
-      break;
-    case T_SHORT:
-      switch (to_elem_bt) {
-        case T_INT:  vpmovzxwd(dst, src, vlen_enc); break;
-        case T_LONG: vpmovzxwq(dst, src, vlen_enc); break;
-        default: ShouldNotReachHere();
-      }
-      break;
-    case T_INT:
-      assert(to_elem_bt == T_LONG, "");
-      vpmovzxdq(dst, src, vlen_enc);
-      break;
-    default:
-      ShouldNotReachHere();
-  }
 }
 
 void C2_MacroAssembler::evpternlog(XMMRegister dst, int func, KRegister mask, XMMRegister src2, XMMRegister src3,

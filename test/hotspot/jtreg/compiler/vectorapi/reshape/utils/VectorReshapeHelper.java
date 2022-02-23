@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -75,9 +75,6 @@ public class VectorReshapeHelper {
     public static final String L2X_NODE  = IRNode.VECTOR_CAST_L2X;
     public static final String F2X_NODE  = IRNode.VECTOR_CAST_F2X;
     public static final String D2X_NODE  = IRNode.VECTOR_CAST_D2X;
-    public static final String UB2X_NODE = IRNode.VECTOR_UCAST_B2X;
-    public static final String US2X_NODE = IRNode.VECTOR_UCAST_S2X;
-    public static final String UI2X_NODE = IRNode.VECTOR_UCAST_I2X;
     public static final String REINTERPRET_NODE = IRNode.VECTOR_REINTERPRET;
 
     public static void runMainHelper(Class<?> testClass, Stream<VectorSpeciesPair> testMethods, String... flags) {
@@ -107,7 +104,7 @@ public class VectorReshapeHelper {
                                             VectorSpecies<T> isp, VectorSpecies<U> osp) throws Throwable {
         var random = RandomGenerator.getDefault();
         boolean isUnsignedCast = castOp.name().startsWith("ZERO");
-        String testMethodName = VectorSpeciesPair.makePair(isp, osp, isUnsignedCast).format();
+        String testMethodName = VectorSpeciesPair.makePair(isp, osp).format();
         var caller = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE).getCallerClass();
         var testMethod = MethodHandles.lookup().findStatic(caller,
                     testMethodName,
@@ -126,7 +123,13 @@ public class VectorReshapeHelper {
                     case "byte"   -> UnsafeUtils.putByte(input, ibase, i, (byte)random.nextInt());
                     case "short"  -> UnsafeUtils.putShort(input, ibase, i, (short)random.nextInt());
                     case "int"    -> UnsafeUtils.putInt(input, ibase, i, random.nextInt());
-                    case "long"   -> UnsafeUtils.putLong(input, ibase, i, random.nextLong());
+                    case "long"   -> {
+                        if (normalArray) {
+                            UnsafeUtils.putLong(input, ibase, i, random.nextInt());
+                        } else {
+                            UnsafeUtils.putLong(input, ibase, i, random.nextLong());
+                        }
+                    }
                     case "float"  -> {
                         if (normalArray || random.nextBoolean()) {
                             UnsafeUtils.putFloat(input, ibase, i, random.nextFloat(Byte.MIN_VALUE, Byte.MAX_VALUE));
