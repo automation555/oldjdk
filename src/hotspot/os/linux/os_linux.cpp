@@ -2174,11 +2174,7 @@ bool os::Linux::print_container_info(outputStream* st) {
   int i = OSContainer::active_processor_count();
   st->print("active_processor_count: ");
   if (i > 0) {
-    if (ActiveProcessorCount > 0) {
-      st->print_cr("%d, but overridden by -XX:ActiveProcessorCount %d", i, ActiveProcessorCount);
-    } else {
-      st->print_cr("%d", i);
-    }
+    st->print_cr("%d", i);
   } else {
     st->print_cr("not supported");
   }
@@ -2612,9 +2608,9 @@ void linux_wrap_code(char* base, size_t size) {
   int fd = ::open(buf, O_CREAT | O_RDWR, S_IRWXU);
 
   if (fd != -1) {
-    off_t rv = ::lseek(fd, size-2, SEEK_SET);
+    off_t rv = os::lseek(fd, size-2, SEEK_SET);
     if (rv != (off_t)-1) {
-      if (::write(fd, "", 1) == 1) {
+      if (os::write(fd, "", 1) == 1) {
         mmap(base, size,
              PROT_READ|PROT_WRITE|PROT_EXEC,
              MAP_PRIVATE|MAP_FIXED|MAP_NORESERVE, fd, 0);
@@ -4927,12 +4923,12 @@ int os::create_binary_file(const char* path, bool rewrite_existing) {
 
 // return current position of file pointer
 jlong os::current_file_offset(int fd) {
-  return (jlong)::lseek64(fd, (off64_t)0, SEEK_CUR);
+  return (jlong)os::lseek(fd, (off64_t)0, SEEK_CUR);
 }
 
 // move file pointer to the specified offset
 jlong os::seek_to_file_offset(int fd, jlong offset) {
-  return (jlong)::lseek64(fd, (off64_t)offset, SEEK_SET);
+  return (jlong)os::lseek(fd, (off64_t)offset, SEEK_SET);
 }
 
 // This code originates from JDK's sysAvailable
@@ -4953,11 +4949,11 @@ int os::available(int fd, jlong *bytes) {
       }
     }
   }
-  if ((cur = ::lseek64(fd, 0L, SEEK_CUR)) == -1) {
+  if ((cur = os::lseek(fd, 0L, SEEK_CUR)) == -1) {
     return 0;
-  } else if ((end = ::lseek64(fd, 0L, SEEK_END)) == -1) {
+  } else if ((end = os::lseek(fd, 0L, SEEK_END)) == -1) {
     return 0;
-  } else if (::lseek64(fd, cur, SEEK_SET) == -1) {
+  } else if (os::lseek(fd, cur, SEEK_SET) == -1) {
     return 0;
   }
   *bytes = end - cur;
@@ -5148,7 +5144,7 @@ void os::pause() {
   if (fd != -1) {
     struct stat buf;
     ::close(fd);
-    while (::stat(filename, &buf) == 0) {
+    while (os::stat(filename, &buf) == 0) {
       (void)::poll(NULL, 0, 100);
     }
   } else {
@@ -5384,20 +5380,21 @@ bool os::supports_map_sync() {
 }
 
 void os::print_memory_mappings(char* addr, size_t bytes, outputStream* st) {
-  // Note: all ranges are "[..)"
   unsigned long long start = (unsigned long long)addr;
   unsigned long long end = start + bytes;
   FILE* f = os::fopen("/proc/self/maps", "r");
   int num_found = 0;
   if (f != NULL) {
-    st->print_cr("Range [%llx-%llx) contains: ", start, end);
+    st->print("Range [%llx-%llx) contains: ", start, end);
     char line[512];
     while(fgets(line, sizeof(line), f) == line) {
-      unsigned long long segment_start = 0;
-      unsigned long long segment_end = 0;
-      if (::sscanf(line, "%llx-%llx", &segment_start, &segment_end) == 2) {
+      unsigned long long a1 = 0;
+      unsigned long long a2 = 0;
+      if (::sscanf(line, "%llx-%llx", &a1, &a2) == 2) {
         // Lets print out every range which touches ours.
-        if (segment_start < end && segment_end > start) {
+        if ((a1 >= start && a1 < end) || // left leg in
+            (a2 >= start && a2 < end) || // right leg in
+            (a1 < start && a2 >= end)) { // superimposition
           num_found ++;
           st->print("%s", line); // line includes \n
         }
@@ -5405,7 +5402,7 @@ void os::print_memory_mappings(char* addr, size_t bytes, outputStream* st) {
     }
     ::fclose(f);
     if (num_found == 0) {
-      st->print_cr("nothing.");
+      st->print("nothing.");
     }
     st->cr();
   }

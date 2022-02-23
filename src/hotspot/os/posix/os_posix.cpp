@@ -660,15 +660,23 @@ void os::dll_unload(void *lib) {
 }
 
 jlong os::lseek(int fd, jlong offset, int whence) {
-  return (jlong) BSD_ONLY(::lseek) NOT_BSD(::lseek64)(fd, offset, whence);
+#ifdef BSD
+  ALLOW_C_FUNCTION(lseek, return (jlong)::lseek(fd, offset, whence);)
+#else
+  ALLOW_C_FUNCTION(lseek64, return (jlong)::lseek64(fd, offset, whence);)
+#endif
 }
 
 int os::fsync(int fd) {
-  return ::fsync(fd);
+  ALLOW_C_FUNCTION(fsync, return ::fsync(fd);)
 }
 
 int os::ftruncate(int fd, jlong length) {
-   return BSD_ONLY(::ftruncate) NOT_BSD(::ftruncate64)(fd, length);
+#ifdef BSD
+  ALLOW_C_FUNCTION(ftruncate, return ::ftruncate(fd, length);)
+#else
+  ALLOW_C_FUNCTION(ftruncate64, return ::ftruncate64(fd, length);)
+#endif
 }
 
 const char* os::get_current_directory(char *buf, size_t buflen) {
@@ -676,12 +684,12 @@ const char* os::get_current_directory(char *buf, size_t buflen) {
 }
 
 FILE* os::fdopen(int fd, const char* mode) {
-  return ::fdopen(fd, mode);
+  ALLOW_C_FUNCTION(fdopen, return ::fdopen(fd, mode);)
 }
 
 ssize_t os::write(int fd, const void *buf, unsigned int nBytes) {
   ssize_t res;
-  RESTARTABLE(::write(fd, buf, (size_t) nBytes), res);
+  ALLOW_C_FUNCTION(write, RESTARTABLE(::write(fd, buf, (size_t) nBytes), res);)
   return res;
 }
 
@@ -690,26 +698,26 @@ ssize_t os::read_at(int fd, void *buf, unsigned int nBytes, jlong offset) {
 }
 
 void os::flockfile(FILE* fp) {
-  ::flockfile(fp);
+  ALLOW_C_FUNCTION(flockfile, ::flockfile(fp);)
 }
 
 void os::funlockfile(FILE* fp) {
-  ::funlockfile(fp);
+  ALLOW_C_FUNCTION(funlockfile, ::funlockfile(fp);)
 }
 
 DIR* os::opendir(const char* dirname) {
   assert(dirname != NULL, "just checking");
-  return ::opendir(dirname);
+  ALLOW_C_FUNCTION(opendir, return ::opendir(dirname);)
 }
 
 struct dirent* os::readdir(DIR* dirp) {
   assert(dirp != NULL, "just checking");
-  return ::readdir(dirp);
+  ALLOW_C_FUNCTION(readdir, return ::readdir(dirp);)
 }
 
 int os::closedir(DIR *dirp) {
   assert(dirp != NULL, "just checking");
-  return ::closedir(dirp);
+  ALLOW_C_FUNCTION(closedir, return ::closedir(dirp);)
 }
 
 int os::socket_close(int fd) {
@@ -717,19 +725,19 @@ int os::socket_close(int fd) {
 }
 
 int os::recv(int fd, char* buf, size_t nBytes, uint flags) {
-  RESTARTABLE_RETURN_INT(::recv(fd, buf, nBytes, flags));
+  ALLOW_C_FUNCTION(recv, RESTARTABLE_RETURN_INT(::recv(fd, buf, nBytes, flags));)
 }
 
 int os::send(int fd, char* buf, size_t nBytes, uint flags) {
-  RESTARTABLE_RETURN_INT(::send(fd, buf, nBytes, flags));
+  ALLOW_C_FUNCTION(send, RESTARTABLE_RETURN_INT(::send(fd, buf, nBytes, flags));)
 }
 
 int os::raw_send(int fd, char* buf, size_t nBytes, uint flags) {
   return os::send(fd, buf, nBytes, flags);
 }
 
-int os::connect(int fd, struct sockaddr* him, socklen_t len) {
-  RESTARTABLE_RETURN_INT(::connect(fd, him, len));
+int os::connect(int fd, const struct sockaddr* him, socklen_t len) {
+  ALLOW_C_FUNCTION(connect, RESTARTABLE_RETURN_INT(::connect(fd, him, len));)
 }
 
 struct hostent* os::get_host_by_name(char* name) {
@@ -862,7 +870,7 @@ char* os::Posix::realpath(const char* filename, char* outbuf, size_t outbuflen) 
 }
 
 int os::stat(const char *path, struct stat *sbuf) {
-  return ::stat(path, sbuf);
+  ALLOW_C_FUNCTION(stat, return ::stat(path, sbuf);)
 }
 
 char * os::native_path(char *path) {
