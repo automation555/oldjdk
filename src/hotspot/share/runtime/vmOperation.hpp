@@ -35,22 +35,24 @@
 
 // Note: When new VM_XXX comes up, add 'XXX' to the template table.
 #define VM_OPS_DO(template)                       \
-  template(Halt)                                  \
-  template(SafepointALot)                         \
+  template(None)                                  \
   template(Cleanup)                               \
   template(ThreadDump)                            \
   template(PrintThreads)                          \
   template(FindDeadlocks)                         \
   template(ClearICs)                              \
   template(ForceSafepoint)                        \
+  template(ForceAsyncSafepoint)                   \
   template(DeoptimizeFrame)                       \
   template(DeoptimizeAll)                         \
   template(ZombieAll)                             \
   template(Verify)                                \
   template(HeapDumper)                            \
+  template(DeoptimizeTheWorld)                    \
   template(CollectForMetadataAllocation)          \
   template(GC_HeapInspection)                     \
   template(GenCollectFull)                        \
+  template(GenCollectFullConcurrent)              \
   template(GenCollectForAllocation)               \
   template(ParallelGCFailedAllocation)            \
   template(ParallelGCSystemGC)                    \
@@ -63,7 +65,9 @@
   template(ZMarkEnd)                              \
   template(ZRelocateStart)                        \
   template(ZVerify)                               \
+  template(HandshakeOneThread)                    \
   template(HandshakeAllThreads)                   \
+  template(HandshakeFallback)                     \
   template(PopulateDumpSharedSpace)               \
   template(JNIFunctionTableCopier)                \
   template(RedefineClasses)                       \
@@ -86,6 +90,7 @@
   template(ShenandoahDegeneratedGC)               \
   template(Exit)                                  \
   template(LinuxDllLoad)                          \
+  template(RotateGCLog)                           \
   template(WhiteBoxOperation)                     \
   template(JVMCIResizeCounters)                   \
   template(ClassLoaderStatsOperation)             \
@@ -95,10 +100,13 @@
   template(CleanClassLoaderDataMetaspaces)        \
   template(PrintCompileQueue)                     \
   template(PrintClassHierarchy)                   \
+  template(PrintClasses)                          \
+  template(ThreadSuspend)                         \
+  template(ThreadsSuspendJVMTI)                   \
   template(ICBufferFull)                          \
+  template(ScavengeMonitors)                      \
   template(PrintMetadata)                         \
   template(GTestExecuteAtSafepoint)               \
-  template(GTestStopSafepoint)                    \
   template(JFROldObject)                          \
   template(JvmtiPostObjectFree)
 
