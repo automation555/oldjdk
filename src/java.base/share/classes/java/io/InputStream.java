@@ -53,7 +53,7 @@ public abstract class InputStream implements Closeable {
     // use when skipping.
     private static final int MAX_SKIP_BUFFER_SIZE = 2048;
 
-    private static final int DEFAULT_BUFFER_SIZE = 8192;
+    private static final int DEFAULT_BUFFER_SIZE = 16 * 8192;
 
     /**
      * Constructor for subclasses to call.
@@ -214,7 +214,7 @@ public abstract class InputStream implements Closeable {
      * @throws     NullPointerException  if {@code b} is {@code null}.
      * @see        java.io.InputStream#read(byte[], int, int)
      */
-    public int read(byte[] b) throws IOException {
+    public int read(byte b[]) throws IOException {
         return read(b, 0, b.length);
     }
 
@@ -275,7 +275,7 @@ public abstract class InputStream implements Closeable {
      *             {@code b.length - off}
      * @see        java.io.InputStream#read()
      */
-    public int read(byte[] b, int off, int len) throws IOException {
+    public int read(byte b[], int off, int len) throws IOException {
         Objects.checkFromIndexSize(off, len, b.length);
         if (len == 0) {
             return 0;

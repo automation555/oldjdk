@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,30 +25,68 @@
 
 package sun.nio.ch;
 
-import java.io.IOException;
-import java.io.OutputStream;
-import java.nio.ByteBuffer;
-import java.nio.channels.IllegalBlockingModeException;
-import java.nio.channels.SelectableChannel;
-import java.nio.channels.WritableByteChannel;
+import java.io.*;
+import java.nio.*;
+import java.nio.channels.*;
+import java.nio.channels.spi.*;
 import java.util.Objects;
 
 /**
- * An OutputStream that writes bytes to a channel.
+ * This class is defined here rather than in java.nio.channels.Channels
+ * so that it will be visible to java.nio.channels.Channels and
+ * sun.nio.ch.ChannelInputStream but not be part of the java.base module API.
+ *
  *
  * @author Mark Reinhold
  * @author Mike McCloskey
+ * @author JSR-51 Expert Group
+ * @since 18
  */
-class ChannelOutputStream extends OutputStream {
+public class ChannelOutputStream extends OutputStream {
+
+    /**
+     * Write all remaining bytes in buffer to the given channel.
+     * If the channel is selectable then it must be configured blocking.
+     */
+    private static void writeFullyImpl(WritableByteChannel ch, ByteBuffer bb)
+        throws IOException
+    {
+        while (bb.remaining() > 0) {
+            int n = ch.write(bb);
+            if (n <= 0)
+                throw new RuntimeException("no bytes written");
+        }
+    }
+
+    /**
+     * Write all remaining bytes in buffer to the given channel.
+     *
+     * @throws  IllegalBlockingModeException
+     *          If the channel is selectable and configured non-blocking.
+     */
+    private static void writeFully(WritableByteChannel ch, ByteBuffer bb)
+        throws IOException
+    {
+        if (ch instanceof SelectableChannel sc) {
+            synchronized (sc.blockingLock()) {
+                if (!sc.isBlocking())
+                    throw new IllegalBlockingModeException();
+                writeFullyImpl(ch, bb);
+            }
+        } else {
+            writeFullyImpl(ch, bb);
+        }
+    }
+
     private final WritableByteChannel ch;
     private ByteBuffer bb;
     private byte[] bs;       // Invoker's previous array
     private byte[] b1;
 
     /**
-     * Initialize a ChannelOutputStream that writes to the given channel.
+     * @param ch The channel wrapped by this stream.
      */
-    ChannelOutputStream(WritableByteChannel ch) {
+    public ChannelOutputStream(WritableByteChannel ch) {
         this.ch = ch;
     }
 
@@ -59,30 +97,17 @@ class ChannelOutputStream extends OutputStream {
         return ch;
     }
 
-    /**
-     * Write all remaining bytes in buffer to the channel.
-     * If the channel is selectable then it must be configured blocking.
-     */
-    private void writeFully(ByteBuffer bb) throws IOException {
-        while (bb.remaining() > 0) {
-            int n = ch.write(bb);
-            if (n <= 0)
-                throw new RuntimeException("no bytes written");
-        }
-    }
-
     @Override
     public synchronized void write(int b) throws IOException {
         if (b1 == null)
             b1 = new byte[1];
         b1[0] = (byte) b;
-        write(b1);
+        this.write(b1);
     }
 
     @Override
     public synchronized void write(byte[] bs, int off, int len)
-        throws IOException
-    {
+        throws IOException {
         Objects.checkFromIndexSize(off, len, bs.length);
         if (len == 0) {
             return;
@@ -94,20 +119,12 @@ class ChannelOutputStream extends OutputStream {
         bb.position(off);
         this.bb = bb;
         this.bs = bs;
-
-        if (ch instanceof SelectableChannel sc) {
-            synchronized (sc.blockingLock()) {
-                if (!sc.isBlocking())
-                    throw new IllegalBlockingModeException();
-                writeFully(bb);
-            }
-        } else {
-            writeFully(bb);
-        }
+        writeFully(ch, bb);
     }
 
     @Override
     public void close() throws IOException {
         ch.close();
     }
+
 }
