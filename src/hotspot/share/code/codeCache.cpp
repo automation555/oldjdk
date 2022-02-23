@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -296,19 +296,20 @@ void CodeCache::initialize_heaps() {
   const size_t alignment = MAX2(page_size(false, 8), (size_t) os::vm_allocation_granularity());
   non_nmethod_size = align_up(non_nmethod_size, alignment);
   profiled_size    = align_down(profiled_size, alignment);
+  non_profiled_size = align_down(non_profiled_size, alignment);
 
   // Reserve one continuous chunk of memory for CodeHeaps and split it into
   // parts for the individual heaps. The memory layout looks like this:
   // ---------- high -----------
-  //    Non-profiled nmethods
   //      Profiled nmethods
   //         Non-nmethods
+  //    Non-profiled nmethods
   // ---------- low ------------
   ReservedCodeSpace rs = reserve_heap_memory(cache_size);
-  ReservedSpace non_method_space    = rs.first_part(non_nmethod_size);
-  ReservedSpace rest                = rs.last_part(non_nmethod_size);
-  ReservedSpace profiled_space      = rest.first_part(profiled_size);
-  ReservedSpace non_profiled_space  = rest.last_part(profiled_size);
+  ReservedSpace non_profiled_space  = rs.first_part(non_profiled_size);
+  ReservedSpace rest                = rs.last_part(non_profiled_size);
+  ReservedSpace non_method_space    = rest.first_part(non_nmethod_size);
+  ReservedSpace profiled_space      = rest.last_part(non_nmethod_size);
 
   // Non-nmethods (stubs, adapters, ...)
   add_heap(non_method_space, "CodeHeap 'non-nmethods'", CodeBlobType::NonNMethod);
@@ -487,7 +488,7 @@ CodeBlob* CodeCache::next_blob(CodeHeap* heap, CodeBlob* cb) {
  */
 CodeBlob* CodeCache::allocate(int size, int code_blob_type, bool handle_alloc_failure, int orig_code_blob_type) {
   // Possibly wakes up the sweeper thread.
-  NMethodSweeper::report_allocation();
+  NMethodSweeper::report_allocation(code_blob_type);
   assert_locked_or_safepoint(CodeCache_lock);
   assert(size > 0, "Code cache allocation request must be > 0 but is %d", size);
   if (size <= 0) {
@@ -512,7 +513,7 @@ CodeBlob* CodeCache::allocate(int size, int code_blob_type, bool handle_alloc_fa
         // Fallback solution: Try to store code in another code heap.
         // NonNMethod -> MethodNonProfiled -> MethodProfiled (-> MethodNonProfiled)
         // Note that in the sweeper, we check the reverse_free_ratio of the code heap
-        // and force stack scanning if less than 10% of the entire code cache are free.
+        // and force stack scanning if less than 10% of the code heap are free.
         int type = code_blob_type;
         switch (type) {
         case CodeBlobType::NonNMethod:
@@ -889,17 +890,38 @@ size_t CodeCache::max_capacity() {
   return max_cap;
 }
 
+bool CodeCache::is_codestub(address addr) {
+  CodeHeap* blob = get_code_heap(CodeBlobType::NonNMethod);
+  return blob->contains(addr);
+}
 
-// Returns the reverse free ratio. E.g., if 25% (1/4) of the code cache
-// is free, reverse_free_ratio() returns 4.
-// Since code heap for each type of code blobs falls forward to the next
-// type of code heap, return the reverse free ratio for the entire
-// code cache.
-double CodeCache::reverse_free_ratio() {
-  double unallocated = MAX2((double)unallocated_capacity(), 1.0); // Avoid division by 0;
-  double max = (double)max_capacity();
-  double result = max / unallocated;
-  assert (max >= unallocated, "Must be");
+size_t CodeCache::max_distance_to_codestub() {
+  if (!SegmentedCodeCache) {
+    return ReservedCodeCacheSize;
+  } else {
+    CodeHeap* blob = get_code_heap(CodeBlobType::NonNMethod);
+    // the max distance is minimized by placing the NonNMethod segment
+    // in between MethodProfiled and MethodNonProfiled segments
+    size_t dist1 = (size_t)blob->high() - (size_t)_low_bound;
+    size_t dist2 = (size_t)_high_bound - (size_t)blob->low();
+    return dist1 > dist2 ? dist1 : dist2;
+  }
+}
+
+/**
+ * Returns the reverse free ratio. E.g., if 25% (1/4) of the code heap
+ * is free, reverse_free_ratio() returns 4.
+ */
+double CodeCache::reverse_free_ratio(int code_blob_type) {
+  CodeHeap* heap = get_code_heap(code_blob_type);
+  if (heap == NULL) {
+    return 0;
+  }
+
+  double unallocated_capacity = MAX2((double)heap->unallocated_capacity(), 1.0); // Avoid division by 0;
+  double max_capacity = (double)heap->max_capacity();
+  double result = max_capacity / unallocated_capacity;
+  assert (max_capacity >= unallocated_capacity, "Must be");
   assert (result >= 1.0, "reverse_free_ratio must be at least 1. It is %f", result);
   return result;
 }
