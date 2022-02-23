@@ -252,12 +252,71 @@ Java_sun_nio_ch_FileChannelImpl_transferTo0(JNIEnv *env, jobject this,
 #endif
 }
 
-JNIEXPORT jint JNICALL
+JNIEXPORT jlong JNICALL
 Java_sun_nio_ch_FileChannelImpl_maxDirectTransferSize0(JNIEnv* env, jobject this)
 {
 #if defined(LINUX)
     return 0x7ffff000; // 2,147,479,552 maximum for sendfile()
 #else
     return java_lang_Integer_MAX_VALUE;
+#endif
+}
+
+#if defined(__APPLE__)
+#define RESTARTABLE(_cmd, _result) do { \
+  do { \
+    _result = _cmd; \
+  } while((_result == -1) && (errno == EINTR)); \
+} while(0)
+
+#define READ_WRITE_TRANSFER_SIZE 32768
+
+long transfer_read_write(JNIEnv* env, jint src, jlong position, jlong count,
+                         jint dst)
+{
+    char buf[READ_WRITE_TRANSFER_SIZE];
+
+    ssize_t tw = 0;
+    off_t offset = (off_t)position;
+    while (tw < count) {
+        ssize_t remaining = count - tw;
+        ssize_t nr = remaining < READ_WRITE_TRANSFER_SIZE ?
+            remaining : READ_WRITE_TRANSFER_SIZE;
+        RESTARTABLE(pread((int)src, &buf, nr, offset), nr);
+        if (nr <= 0) {
+            break;
+        }
+        offset += nr;
+
+        ssize_t nw;
+        RESTARTABLE(write((int)dst, &buf, nr), nw);
+        tw += nw;
+        if (nw != nr)
+            return tw;
+    }
+
+    return tw;
+}
+#endif
+
+JNIEXPORT jlong JNICALL
+Java_sun_nio_ch_FileChannelImpl_transferToFileChannel0(JNIEnv *env,
+                                                       jobject this,
+                                                       jobject srcFDO,
+                                                       jlong position,
+                                                       jlong count,
+                                                       jobject dstFDO)
+{
+    jint srcFD = fdval(env, srcFDO);
+    jint dstFD = fdval(env, dstFDO);
+
+#if defined(__linux__)
+    // Once the Linux kernel version used for the JDK production build is at
+    // least 5.3, copy_file_range(2) could be used here.
+    return IOS_UNSUPPORTED;
+#elif defined(__APPLE__)
+    return transfer_read_write(env, srcFD, position, count, dstFD);
+#else
+    return IOS_UNSUPPORTED;
 #endif
 }
