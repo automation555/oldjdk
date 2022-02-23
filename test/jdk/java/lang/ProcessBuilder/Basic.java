@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,7 +27,7 @@
  *      5026830 5023243 5070673 4052517 4811767 6192449 6397034 6413313
  *      6464154 6523983 6206031 4960438 6631352 6631966 6850957 6850958
  *      4947220 7018606 7034570 4244896 5049299 8003488 8054494 8058464
- *      8067796 8224905 8263729 8265173 8272600 8231297
+ *      8067796 8224905 8263729 8265173 8272600 8231297 8282239
  * @key intermittent
  * @summary Basic tests for Process and Environment Variable code
  * @modules java.base/java.lang:open
@@ -1865,17 +1865,16 @@ public class Basic {
             List<String> childArgs = new ArrayList<String>(javaChildArgs);
             childArgs.add("System.getenv()");
             String[] cmdp = childArgs.toArray(new String[childArgs.size()]);
-            String[] envp;
-            String[] envpWin = {"=C:=\\", "=ExitValue=3", "SystemRoot="+systemRoot};
-            String[] envpOth = {"=ExitValue=3", "=C:=\\"};
-            if (Windows.is()) {
-                envp = envpWin;
-            } else {
-                envp = envpOth;
-            }
+            String[] envp = {
+                "=ExitValue=3",
+                "=C:=\\",
+                (AIX.is() ? "LIBPATH="+libpath : ""),
+                (Windows.is() ? "SystemRoot="+systemRoot : "")
+            };
             Process p = Runtime.getRuntime().exec(cmdp, envp);
-            String expected = Windows.is() ? "=C:=\\,=ExitValue=3,SystemRoot="+systemRoot+"," : "=C:=\\,";
-            expected = AIX.is() ? expected + "LIBPATH="+libpath+",": expected;
+            String expected = "=C:=\\," +
+                (AIX.is() ? "LIBPATH="+libpath+"," : "") +
+                (Windows.is() ? "=ExitValue=3,SystemRoot="+systemRoot+"," : "");
             String commandOutput = commandOutput(p);
             if (MacOSX.is()) {
                 commandOutput = removeMacExpectedVars(commandOutput);
@@ -1911,16 +1910,12 @@ public class Basic {
             List<String> childArgs = new ArrayList<String>(javaChildArgs);
             childArgs.add("System.getenv()");
             String[] cmdp = childArgs.toArray(new String[childArgs.size()]);
-            String[] envpWin = {"SystemRoot="+systemRoot, "LC_ALL=C\u0000\u0000", // Yuck!
-                             "FO\u0000=B\u0000R"};
-            String[] envpOth = {"LC_ALL=C\u0000\u0000", // Yuck!
-                             "FO\u0000=B\u0000R"};
-            String[] envp;
-            if (Windows.is()) {
-                envp = envpWin;
-            } else {
-                envp = envpOth;
-            }
+            String[] envp = {
+                "LC_ALL=C\u0000\u0000", // Yuck!
+                "FO\u0000=B\u0000R",
+                (AIX.is() ? "LIBPATH="+libpath : ""),
+                (Windows.is() ? "SystemRoot="+systemRoot : "")
+            };
             System.out.println ("cmdp");
             for (int i=0; i<cmdp.length; i++) {
                 System.out.printf ("cmdp %d: %s\n", i, cmdp[i]);
@@ -1937,12 +1932,10 @@ public class Basic {
             if (AIX.is()) {
                 commandOutput = removeAixExpectedVars(commandOutput);
             }
-            check(commandOutput.equals(Windows.is()
-                    ? "LC_ALL=C,SystemRoot="+systemRoot+","
-                    : AIX.is()
-                            ? "LC_ALL=C,LIBPATH="+libpath+","
-                            : "LC_ALL=C,"),
-                  "Incorrect handling of envstrings containing NULs");
+            String expected = "LC_ALL=C," +
+                (AIX.is() ? "LIBPATH="+libpath+"," : "") +
+                (Windows.is() ? "SystemRoot="+systemRoot+"," : "");
+            check(commandOutput.equals(expected), "Incorrect handling of envstrings containing NULs");
         } catch (Throwable t) { unexpected(t); }
 
         //----------------------------------------------------------------
