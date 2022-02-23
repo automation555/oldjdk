@@ -56,6 +56,26 @@ G1ConcurrentMarkThread::G1ConcurrentMarkThread(G1ConcurrentMark* cm) :
   create_and_start();
 }
 
+class CMRemark : public VoidClosure {
+  G1ConcurrentMark* _cm;
+public:
+  CMRemark(G1ConcurrentMark* cm) : _cm(cm) {}
+
+  void do_void(){
+    _cm->remark();
+  }
+};
+
+class CMCleanup : public VoidClosure {
+  G1ConcurrentMark* _cm;
+public:
+  CMCleanup(G1ConcurrentMark* cm) : _cm(cm) {}
+
+  void do_void(){
+    _cm->cleanup();
+  }
+};
+
 double G1ConcurrentMarkThread::mmu_delay_end(G1Policy* policy, bool remark) {
   // There are 3 reasons to use SuspendibleThreadSetJoiner.
   // 1. To avoid concurrency problem.
@@ -139,15 +159,6 @@ void G1ConcurrentMarkThread::run_service() {
 }
 
 void G1ConcurrentMarkThread::stop_service() {
-  if (in_progress()) {
-    // We are not allowed to abort the marking threads during root region scan.
-    // Needs to be done separately.
-    _cm->root_regions()->abort();
-    _cm->root_regions()->wait_until_scan_finished();
-
-    _cm->abort_marking_threads();
-  }
-
   MutexLocker ml(CGC_lock, Mutex::_no_safepoint_check_flag);
   CGC_lock->notify_all();
 }
@@ -180,15 +191,10 @@ bool G1ConcurrentMarkThread::phase_mark_loop() {
     // Subphase 1: Mark From Roots.
     if (subphase_mark_from_roots()) return true;
 
-    // Subphase 2: Preclean (optional)
-    if (G1UseReferencePrecleaning) {
-      if (subphase_preclean()) return true;
-    }
-
-    // Subphase 3: Wait for Remark.
+    // Subphase 2: Wait for Remark.
     if (subphase_delay_to_keep_mmu_before_remark()) return true;
 
-    // Subphase 4: Remark pause
+    // Subphase 3: Remark pause
     if (subphase_remark()) return true;
 
     // Check if we need to restart the marking loop.
@@ -215,12 +221,6 @@ bool G1ConcurrentMarkThread::subphase_mark_from_roots() {
   return _cm->has_aborted();
 }
 
-bool G1ConcurrentMarkThread::subphase_preclean() {
-  G1ConcPhaseTimer p(_cm, "Concurrent Preclean");
-  _cm->preclean();
-  return _cm->has_aborted();
-}
-
 bool G1ConcurrentMarkThread::subphase_delay_to_keep_mmu_before_remark() {
   delay_to_keep_mmu(true /* remark */);
   return _cm->has_aborted();
@@ -228,7 +228,8 @@ bool G1ConcurrentMarkThread::subphase_delay_to_keep_mmu_before_remark() {
 
 bool G1ConcurrentMarkThread::subphase_remark() {
   ConcurrentGCBreakpoints::at("BEFORE MARKING COMPLETED");
-  VM_G1PauseRemark op;
+  CMRemark cl(_cm);
+  VM_G1Concurrent op(&cl, "Pause Remark");
   VMThread::execute(&op);
   return _cm->has_aborted();
 }
@@ -245,7 +246,8 @@ bool G1ConcurrentMarkThread::phase_delay_to_keep_mmu_before_cleanup() {
 }
 
 bool G1ConcurrentMarkThread::phase_cleanup() {
-  VM_G1PauseCleanup op;
+  CMCleanup cl(_cm);
+  VM_G1Concurrent op(&cl, "Pause Cleanup");
   VMThread::execute(&op);
   return _cm->has_aborted();
 }
