@@ -365,9 +365,10 @@ class os: AllStatic {
   // Prints all mappings
   static void print_memory_mappings(outputStream* st);
 
-  // Touch memory pages that cover the memory range from start to end
-  // (exclusive) to make the OS back the memory range with actual memory.
-  // Other threads may use the memory range concurrently with pretouch.
+  // Touch memory pages that cover the memory range from start to end (exclusive)
+  // to make the OS back the memory range with actual memory.
+  // Current implementation may not touch the last page if unaligned addresses
+  // are passed.
   static void   pretouch_memory(void* start, void* end, size_t page_size = vm_page_size());
 
   enum ProtType { MEM_PROT_NONE, MEM_PROT_READ, MEM_PROT_RW, MEM_PROT_RWX };
@@ -786,7 +787,7 @@ class os: AllStatic {
   static int recv(int fd, char* buf, size_t nBytes, uint flags);
   static int send(int fd, char* buf, size_t nBytes, uint flags);
   static int raw_send(int fd, char* buf, size_t nBytes, uint flags);
-  static int connect(int fd, struct sockaddr* him, socklen_t len);
+  static int connect(int fd, const struct sockaddr* him, socklen_t len);
   static struct hostent* get_host_by_name(char* name);
 
   // Support for signals (see JVM_RaiseSignal, JVM_RegisterSignal)

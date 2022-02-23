@@ -28,6 +28,7 @@
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/os.inline.hpp"
 #include "services/attachListener.hpp"
+#include "services/dtraceAttacher.hpp"
 
 #include <unistd.h>
 #include <signal.h>
@@ -384,7 +385,7 @@ LinuxAttachOperation* LinuxAttachListener::dequeue() {
 // write the given buffer to the socket
 int LinuxAttachListener::write_fully(int s, char* buf, int len) {
   do {
-    ssize_t n = ::write(s, buf, len);
+    ssize_t n = os::write(s, buf, len);
     if (n == -1) {
       if (errno != EINTR) return -1;
     } else {
