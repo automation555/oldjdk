@@ -30,8 +30,10 @@
  * @since 9
  */
 module jdk.jfr {
+
     exports jdk.jfr;
     exports jdk.jfr.consumer;
 
     exports jdk.jfr.internal.management to jdk.management.jfr;
+    exports jdk.jfr.internal.startup to jdk.jlink;
 }
