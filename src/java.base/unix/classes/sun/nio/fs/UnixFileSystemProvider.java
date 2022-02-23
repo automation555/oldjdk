@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -431,13 +431,24 @@ public abstract class UnixFileSystemProvider
             dfd2 = dup(dfd1);
             dp = fdopendir(dfd1);
         } catch (UnixException x) {
-            if (dfd1 != -1)
-                UnixNativeDispatcher.close(dfd1);
-            if (dfd2 != -1)
-                UnixNativeDispatcher.close(dfd2);
-            if (x.errno() == UnixConstants.ENOTDIR)
-                throw new NotDirectoryException(dir.getPathForExceptionMessage());
-            x.rethrowAsIOException(dir);
+            IOException ioe = x.errno() == UnixConstants.ENOTDIR ?
+                new NotDirectoryException(dir.getPathForExceptionMessage()) :
+                x.asIOException(dir);
+            if (dfd1 != -1) {
+                try {
+                    UnixNativeDispatcher.close(dfd1);
+                } catch (UnixException y) {
+                    ioe.addSuppressed(y);
+                }
+            }
+            if (dfd2 != -1) {
+                try {
+                    UnixNativeDispatcher.close(dfd2);
+                } catch (UnixException z) {
+                    ioe.addSuppressed(z);
+                }
+            }
+            throw ioe;
         }
         return new UnixSecureDirectoryStream(dir, dp, dfd2, filter);
     }
