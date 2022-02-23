@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,6 +35,7 @@
 #include COMPILER_HEADER(utilities/globalDefinitions)
 
 #include <cstddef>
+#include <type_traits>
 
 class oopDesc;
 
@@ -605,23 +606,24 @@ inline double percent_of(T numerator, T denominator) {
 //----------------------------------------------------------------------------------------------------
 // Special casts
 // Cast floats into same-size integers and vice-versa w/o changing bit-pattern
-typedef union {
-  jfloat f;
-  jint i;
-} FloatIntConv;
+template<typename T, typename F>
+inline T bit_cast(const F& from) noexcept { // replace with the real thing when we can use c++20
+  static_assert(sizeof(T) == sizeof(F), "must be of the same size");
+  static_assert(std::is_trivially_copyable<T>(), "output type must be trivially copyable");
+  static_assert(std::is_trivially_copyable<F>(), "input type must be trivially copyable");
+  static_assert(std::is_default_constructible<T>() &&
+                std::is_trivially_copy_assignable<T>(), "implementation limits");
+  T to;
+  memcpy(&to, &from, sizeof(T));
+  return to;
+}
 
-typedef union {
-  jdouble d;
-  jlong l;
-  julong ul;
-} DoubleLongConv;
+inline jint    jint_cast    (jfloat  x)  { return bit_cast<jint>   (x); }
+inline jfloat  jfloat_cast  (jint    x)  { return bit_cast<jfloat> (x); }
 
-inline jint    jint_cast    (jfloat  x)  { return ((FloatIntConv*)&x)->i; }
-inline jfloat  jfloat_cast  (jint    x)  { return ((FloatIntConv*)&x)->f; }
-
-inline jlong   jlong_cast   (jdouble x)  { return ((DoubleLongConv*)&x)->l;  }
-inline julong  julong_cast  (jdouble x)  { return ((DoubleLongConv*)&x)->ul; }
-inline jdouble jdouble_cast (jlong   x)  { return ((DoubleLongConv*)&x)->d;  }
+inline jlong   jlong_cast   (jdouble x)  { return bit_cast<jlong>  (x); }
+inline julong  julong_cast  (jdouble x)  { return bit_cast<julong> (x); }
+inline jdouble jdouble_cast (jlong   x)  { return bit_cast<jdouble>(x); }
 
 inline jint low (jlong value)                    { return jint(value); }
 inline jint high(jlong value)                    { return jint(value >> 32); }
@@ -641,10 +643,22 @@ inline jlong jlong_from(jint h, jint l) {
   return result;
 }
 
-union jlong_accessor {
-  jint  words[2];
-  jlong long_value;
+#ifndef _LP64
+
+struct jlong_accessor {
+  jint words[2];
+
+  jlong_accessor() = default;
+  jlong_accessor(jlong j) {
+    static_assert(sizeof(words) == sizeof(jlong), "");
+    memcpy(&words, &j, sizeof(jlong));
+  }
+  jlong long_value() const {
+    return bit_cast<jlong>(words);
+  }
 };
+
+#endif // !_LP64
 
 void basic_types_init(); // cannot define here; uses assert
 
