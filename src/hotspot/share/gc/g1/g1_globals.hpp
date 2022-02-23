@@ -379,6 +379,16 @@
            number of free regions and the expected survival rates in each   \
            section of the heap.")                                           \
                                                                             \
+  product(uint, G1RemoveSelfForwardPtrsWorkerCost, 2,                       \
+          "The factor for per region work cost to remove self forwardee "   \
+          "for evecuation failure regions.")                                \
+          range(1, 16)                                                      \
+                                                                            \
+  product(uint, G1EvacuationFailureHeapRegionChunkNum, 256,                 \
+          "Number of chunks per G1 region when processing evacuation "      \
+          "failed regions in parallel. ")                                   \
+          range(1, 1024)                                                    \
+                                                                            \
   GC_G1_EVACUATION_FAILURE_FLAGS(develop,                                   \
                     develop_pd,                                             \
                     product,                                                \
