@@ -24,10 +24,8 @@
 #ifndef SHARE_LOGGING_LOGTAG_HPP
 #define SHARE_LOGGING_LOGTAG_HPP
 
-#include "memory/allStatic.hpp"
+#include "memory/allocation.hpp"
 #include "utilities/globalDefinitions.hpp"
-
-class outputStream;
 
 // List of available logging tags. New tags should be added here, in
 // alphabetical order.
@@ -68,6 +66,7 @@ class outputStream;
   LOG_TAG(defaultmethods) \
   LOG_TAG(director) \
   LOG_TAG(dump) \
+  NOT_PRODUCT(LOG_TAG(dwarf)) \
   LOG_TAG(dynamic) \
   LOG_TAG(ergo) \
   LOG_TAG(event) \
