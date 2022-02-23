@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -176,6 +176,26 @@ class PlainHttpConnection extends HttpConnection {
                     if (debug.on())
                         debug.log("registering connect timer: " + connectTimerEvent);
                     client().registerTimer(connectTimerEvent);
+                }
+            }
+
+            var localAddr = client().localAddress();
+            if (localAddr != null) {
+                if (debug.on()) {
+                    debug.log("binding to configured local address " + localAddr);
+                }
+                PrivilegedExceptionAction<SocketChannel> pa = () -> chan.bind(localAddr);
+                try {
+                    AccessController.doPrivileged(pa);
+                    if (debug.on()) {
+                        debug.log("bind completed " + localAddr);
+                    }
+                } catch (PrivilegedActionException e) {
+                    var cause = e.getCause();
+                    if (debug.on()) {
+                        debug.log("bind to " + localAddr + " failed: " + cause.getMessage());
+                    }
+                    throw cause;
                 }
             }
 

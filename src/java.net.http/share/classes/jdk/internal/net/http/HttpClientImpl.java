@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,7 +36,9 @@ import java.lang.ref.WeakReference;
 import java.net.Authenticator;
 import java.net.ConnectException;
 import java.net.CookieHandler;
+import java.net.InetSocketAddress;
 import java.net.ProxySelector;
+import java.net.SocketAddress;
 import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.nio.ByteBuffer;
@@ -188,6 +190,7 @@ final class HttpClientImpl extends HttpClient implements Trackable {
     private final Http2ClientImpl client2;
     private final long id;
     private final String dbgTag;
+    private final SocketAddress localAddr;
 
     // The SSL DirectBuffer Supplier provides the ability to recycle
     // buffers used between the socket reader and the SSLEngine, or
@@ -276,6 +279,14 @@ final class HttpClientImpl extends HttpClient implements Trackable {
                            SingleFacadeFactory facadeFactory) {
         id = CLIENT_IDS.incrementAndGet();
         dbgTag = "HttpClientImpl(" + id +")";
+        if (builder.localAddr instanceof InetSocketAddress isa) {
+            @SuppressWarnings("removal")
+            var sm = System.getSecurityManager();
+            if (sm != null) {
+                sm.checkListen(isa.getPort());
+            }
+        }
+        localAddr = builder.localAddr;
         if (builder.sslContext == null) {
             try {
                 sslContext = SSLContext.getDefault();
@@ -1179,6 +1190,10 @@ final class HttpClientImpl extends HttpClient implements Trackable {
     @Override
     public Version version() {
         return version;
+    }
+
+    SocketAddress localAddress() {
+        return localAddr;
     }
 
     String dbgString() {
