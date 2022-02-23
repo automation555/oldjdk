@@ -2174,11 +2174,7 @@ bool os::Linux::print_container_info(outputStream* st) {
   int i = OSContainer::active_processor_count();
   st->print("active_processor_count: ");
   if (i > 0) {
-    if (ActiveProcessorCount > 0) {
-      st->print_cr("%d, but overridden by -XX:ActiveProcessorCount %d", i, ActiveProcessorCount);
-    } else {
-      st->print_cr("%d", i);
-    }
+    st->print_cr("%d", i);
   } else {
     st->print_cr("not supported");
   }
@@ -2463,6 +2459,8 @@ void os::get_summary_cpu_info(char* cpuinfo, size_t length) {
   strncpy(cpuinfo, "IA64", length);
 #elif defined(PPC)
   strncpy(cpuinfo, "PPC64", length);
+#elif defined(RISCV)
+  strncpy(cpuinfo, "RISCV64", length);
 #elif defined(S390)
   strncpy(cpuinfo, "S390", length);
 #elif defined(SPARC)
@@ -5384,20 +5382,21 @@ bool os::supports_map_sync() {
 }
 
 void os::print_memory_mappings(char* addr, size_t bytes, outputStream* st) {
-  // Note: all ranges are "[..)"
   unsigned long long start = (unsigned long long)addr;
   unsigned long long end = start + bytes;
   FILE* f = os::fopen("/proc/self/maps", "r");
   int num_found = 0;
   if (f != NULL) {
-    st->print_cr("Range [%llx-%llx) contains: ", start, end);
+    st->print("Range [%llx-%llx) contains: ", start, end);
     char line[512];
     while(fgets(line, sizeof(line), f) == line) {
-      unsigned long long segment_start = 0;
-      unsigned long long segment_end = 0;
-      if (::sscanf(line, "%llx-%llx", &segment_start, &segment_end) == 2) {
+      unsigned long long a1 = 0;
+      unsigned long long a2 = 0;
+      if (::sscanf(line, "%llx-%llx", &a1, &a2) == 2) {
         // Lets print out every range which touches ours.
-        if (segment_start < end && segment_end > start) {
+        if ((a1 >= start && a1 < end) || // left leg in
+            (a2 >= start && a2 < end) || // right leg in
+            (a1 < start && a2 >= end)) { // superimposition
           num_found ++;
           st->print("%s", line); // line includes \n
         }
@@ -5405,7 +5404,7 @@ void os::print_memory_mappings(char* addr, size_t bytes, outputStream* st) {
     }
     ::fclose(f);
     if (num_found == 0) {
-      st->print_cr("nothing.");
+      st->print("nothing.");
     }
     st->cr();
   }
