@@ -30,6 +30,7 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.ObjectStreamField;
 import java.io.Serializable;
+import java.net.InetAddress;
 import java.security.AccessController;
 import java.security.Permission;
 import java.security.PermissionCollection;
@@ -37,6 +38,7 @@ import java.security.PrivilegedAction;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Map;
+import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.StringTokenizer;
 import java.util.Vector;
@@ -205,7 +207,7 @@ public final class SocketPermission extends Permission
     // the canonical name of the host
     // in the case of "*.foo.com", cname is ".foo.com".
 
-    private transient String cname;
+    private transient String[] cnames;
 
     // all the IP addresses of the host
     private transient InetAddress[] addresses;
@@ -243,7 +245,6 @@ public final class SocketPermission extends Permission
     };
 
     static {
-        @SuppressWarnings("removal")
         Boolean tmp = java.security.AccessController.doPrivileged(
                 new sun.security.action.GetBooleanAction("sun.net.trustNameService"));
         trustNameService = tmp.booleanValue();
@@ -331,7 +332,7 @@ public final class SocketPermission extends Permission
                         ind = host.lastIndexOf(':');
                         host = "[" + host.substring(0, ind) + "]" +
                             host.substring(ind);
-                    } else if (tokens == 8 && !host.contains("::")) {
+                    } else if (tokens == 8 && host.indexOf("::") == -1) {
                         // IPv6 address only, not followed by port
                         host = "[" + host + "]";
                     } else {
@@ -456,9 +457,9 @@ public final class SocketPermission extends Permission
         } else if (host.startsWith("*")) {
             wildcard = true;
             if (host.equals("*")) {
-                cname = "";
+                cnames = new String[]{""};
             } else if (host.startsWith("*.")) {
-                cname = host.substring(1).toLowerCase();
+                cnames = new String[]{host.substring(1).toLowerCase()};
             } else {
               throw new
                IllegalArgumentException("invalid host wildcard specification");
@@ -623,16 +624,16 @@ public final class SocketPermission extends Permission
         try {
             if (!trustNameService && (defaultDeny ||
                 sun.net.www.URLConnection.isProxiedHost(hostname))) {
-                if (this.cname == null) {
+                if (this.cnames == null) {
                     this.getCanonName();
                 }
-                if (!match(cname, hostname)) {
+                if (!matchArr(cnames, hostname)) {
                     // Last chance
                     if (!authorized(hostname, addresses[0].getAddress())) {
                         untrusted = true;
                         Debug debug = getDebug();
                         if (debug != null && Debug.isOn("failure")) {
-                            debug.println("socket access restriction: proxied host " + "(" + addresses[0] + ")" + " does not match " + cname + " from reverse lookup");
+                            debug.println("socket access restriction: proxied host " + "(" + addresses[0] + ")" + " does not match " + cnames[0] + " from reverse lookup");
                         }
                         return true;
                     }
@@ -650,13 +651,11 @@ public final class SocketPermission extends Permission
      * attempt to get the fully qualified domain name
      *
      */
-    void getCanonName()
-        throws UnknownHostException
-    {
-        if (cname != null || invalid || untrusted) return;
-
+    void getCanonName() throws UnknownHostException {
+        if (cnames != null || invalid || untrusted) {
+            return;
+        }
         // attempt to get the canonical name
-
         try {
             // first get the IP addresses if we don't have them yet
             // this is because we need the IP address to then get
@@ -668,10 +667,18 @@ public final class SocketPermission extends Permission
             // we have to do this check, otherwise we might not
             // get the fully qualified domain name
             if (init_with_ip) {
-                cname = addresses[0].getHostName(false).toLowerCase();
+                cnames = new String[]{addresses[0].getHostName(false).toLowerCase()};
             } else {
-             cname = InetAddress.getByName(addresses[0].getHostAddress()).
-                                              getHostName(false).toLowerCase();
+                cnames = new String[addresses.length];
+                int index = 0;
+                for (InetAddress inAdd : addresses) {
+                    try {
+                        cnames[index++] = InetAddress.getByName(inAdd.getHostAddress()).
+                                getHostName(false).toLowerCase();
+                    } catch (UnknownHostException ex) {
+                        cnames[index - 1] = null;
+                    }
+                }
             }
         } catch (UnknownHostException uhe) {
             invalid = true;
@@ -691,6 +698,15 @@ public final class SocketPermission extends Permission
         } else {
             return name;
         }
+    }
+
+    private boolean matchArr(String[] cnames, String hname) {
+        for (String cname : cnames) {
+            if (cname != null && match(cname, hname)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean match(String cname, String hname) {
@@ -808,9 +824,7 @@ public final class SocketPermission extends Permission
                     host = getName().substring(0,i);
                 }
             }
-
-            addresses =
-                new InetAddress[] {InetAddress.getAllByName0(host, false)[0]};
+            addresses = InetAddress.getAllByName0(host, false);
 
         } catch (UnknownHostException uhe) {
             invalid = true;
@@ -871,7 +885,7 @@ public final class SocketPermission extends Permission
 
     /**
      * Checks if the incoming Permission's action are a proper subset of
-     * this object's actions.
+     * the this object's actions.
      * <P>
      * Check, in the following order:
      * <ul>
@@ -913,9 +927,8 @@ public final class SocketPermission extends Permission
                 }
             }
         }
-
         // allow a "*" wildcard to always match anything
-        if (this.wildcard && "".equals(this.cname))
+        if (this.wildcard && "".equals(this.cnames[0]))
             return true;
 
         // return if either one of these NetPerm objects are invalid...
@@ -927,7 +940,6 @@ public final class SocketPermission extends Permission
             if (this.init_with_ip) { // we only check IP addresses
                 if (that.wildcard)
                     return false;
-
                 if (that.init_with_ip) {
                     return (this.addresses[0].equals(that.addresses[0]));
                 } else {
@@ -943,27 +955,25 @@ public final class SocketPermission extends Permission
                 // don't check any other cases
                 return false;
             }
-
             // check and see if we have any wildcards...
             if (this.wildcard || that.wildcard) {
                 // if they are both wildcards, return true iff
                 // that's cname ends with this cname (i.e., *.example.com
                 // implies *.foo.example.com)
                 if (this.wildcard && that.wildcard)
-                    return (that.cname.endsWith(this.cname));
+                    return (that.cnames[0].endsWith(this.cnames[0]));
 
                 // a non-wildcard can't imply a wildcard
                 if (that.wildcard)
                     return false;
 
-                // this is a wildcard, lets see if that's cname ends with
+                // this is a wildcard, lets see if that's cnames ends with
                 // it...
-                if (that.cname == null) {
+                if (that.cnames == null) {
                     that.getCanonName();
                 }
-                return (that.cname.endsWith(this.cname));
+                return (that.cnames[0].endsWith(this.cnames[0]));
             }
-
             // compare IP addresses
             if (this.addresses == null) {
                 this.getIP();
@@ -972,7 +982,6 @@ public final class SocketPermission extends Permission
             if (that.addresses == null) {
                 that.getIP();
             }
-
             if (!(that.init_with_ip && this.isUntrusted())) {
                 for (j = 0; j < this.addresses.length; j++) {
                     for (i=0; i < that.addresses.length; i++) {
@@ -983,15 +992,14 @@ public final class SocketPermission extends Permission
 
                 // XXX: if all else fails, compare hostnames?
                 // Do we really want this?
-                if (this.cname == null) {
+                if (this.cnames == null) {
                     this.getCanonName();
                 }
 
-                if (that.cname == null) {
+                if (that.cnames == null) {
                     that.getCanonName();
                 }
-
-                return (this.cname.equalsIgnoreCase(that.cname));
+                return this.cnames[0].equalsIgnoreCase(that.cnames[0]);
             }
 
         } catch (UnknownHostException uhe) {
@@ -1013,10 +1021,10 @@ public final class SocketPermission extends Permission
         if (thisHost == null) {
             return false;
         } else if (this.wildcard) {
-            final int cnameLength = this.cname.length();
+            final int cnameLength = this.cnames[0].length();
             return thatHost.regionMatches(true,
                                           (thatHost.length() - cnameLength),
-                                          this.cname, 0, cnameLength);
+                                          this.cnames[0], 0, cnameLength);
         } else {
             return thisHost.equalsIgnoreCase(thatHost);
         }
@@ -1078,8 +1086,8 @@ public final class SocketPermission extends Permission
         if (this.invalid || that.invalid)
             return false;
 
-        if (this.cname != null) {
-            return this.cname.equalsIgnoreCase(that.cname);
+        if (this.cnames != null) {
+            return this.cnames[0].equalsIgnoreCase(that.cnames[0]);
         }
 
         return false;
@@ -1109,10 +1117,10 @@ public final class SocketPermission extends Permission
 
         }
 
-        if (invalid || cname == null)
+        if (invalid || cnames == null)
             return this.getName().hashCode();
         else
-            return this.cname.hashCode();
+            return this.cnames[0].hashCode();
     }
 
     /**
@@ -1223,7 +1231,6 @@ public final class SocketPermission extends Permission
      * Check the system/security property for the ephemeral port range
      * for this system. The suffix is either "high" or "low"
      */
-    @SuppressWarnings("removal")
     private static int initEphemeralPorts(String suffix, int defval) {
         return AccessController.doPrivileged(
             new PrivilegedAction<>(){
@@ -1295,7 +1302,7 @@ public final class SocketPermission extends Permission
     /*
     public String toString()
     {
-        StringBuilder s = new StringBuilder(super.toString() + "\n" +
+        StringBuffer s = new StringBuffer(super.toString() + "\n" +
             "cname = " + cname + "\n" +
             "wildcard = " + wildcard + "\n" +
             "invalid = " + invalid + "\n" +
