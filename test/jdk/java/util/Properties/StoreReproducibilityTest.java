@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,7 +44,7 @@ import java.util.TimeZone;
 /*
  * @test
  * @summary Tests that the Properties.store() APIs generate output that is reproducible
- * @bug 8231640
+ * @bug 8231640 8282023
  * @library /test/lib
  * @run driver StoreReproducibilityTest
  */
@@ -425,10 +425,10 @@ public class StoreReproducibilityTest {
         System.out.println("Found date comment " + dateComment + " in file " + destFile);
         final Date parsedDate;
         try {
-            Instant instant = Instant.from(DateTimeFormatter.ofPattern(DATE_FORMAT_PATTERN).parse(dateComment));
+            Instant instant = Instant.from(reproducibleDateTimeFormatter.parse(dateComment));
             parsedDate = new Date(instant.toEpochMilli());
         } catch (DateTimeParseException pe) {
-            throw new RuntimeException("Unexpected date " + dateComment + " in stored properties " + destFile);
+            throw new RuntimeException("Unexpected date " + dateComment + " in stored properties " + destFile, pe);
         }
         if (!parsedDate.after(date)) {
             throw new RuntimeException("Expected date comment " + dateComment + " to be after " + date
