@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2015, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,7 +26,7 @@
 
 #if !defined(_WINDOWS) && !defined(__APPLE__)
 #include "decoder_elf.hpp"
-#include "memory/allocation.inline.hpp"
+#include "logging/log.hpp"
 
 ElfDecoder::~ElfDecoder() {
   if (_opened_elf_files != NULL) {
@@ -52,6 +52,39 @@ bool ElfDecoder::decode(address addr, char *buf, int buflen, int* offset, const 
   }
   return true;
 }
+
+bool ElfDecoder::get_source_info(address pc, char* filename, size_t filename_len, int* line, bool is_pc_after_call) {
+  if (filename == nullptr || filename_len <= 0 || line == nullptr) {
+    return false;
+  }
+  filename[0] = '\0';
+  *line = -1;
+
+  char filepath[JVM_MAXPATHLEN];
+  int offset_in_library = -1;
+  if (!os::dll_address_to_library_name(pc, filepath, sizeof(filepath), &offset_in_library) || offset_in_library < 0) {
+    // Method not found. offset_in_library should not overflow.
+    log_develop_info(dwarf)("Did not find library for address " INTPTR_FORMAT, p2i(pc));
+    return false;
+  }
+
+  const uint32_t unsigned_offset_in_library = (uint32_t)offset_in_library;
+  log_develop_debug(dwarf)("##### Find filename and line number for offset " PTR32_FORMAT " in library %s #####", unsigned_offset_in_library, filepath);
+
+  ElfFile* file = get_elf_file(filepath);
+  if (file == NULL) {
+    return false;
+  }
+
+  if (!file->get_source_info(unsigned_offset_in_library, filename, filename_len, line, is_pc_after_call)) {
+    return false;
+  }
+
+  log_develop_info(dwarf)("pc: " INTPTR_FORMAT ", offset: " PTR32_FORMAT ", filename: %s, line: %u", p2i(pc), offset_in_library, filename, *line);
+  log_develop_debug(dwarf)(""); // To structure the debug output better.
+  return true;
+}
+
 
 ElfFile* ElfDecoder::get_elf_file(const char* filepath) {
   ElfFile* file;

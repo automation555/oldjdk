@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2003, 2022, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2017, 2020 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -108,6 +108,12 @@ class VMError : public AllStatic {
   static void print_native_stack(outputStream* st, frame fr, Thread* t,
                                  char* buf, int buf_size);
   NOT_PRODUCT(private:)
+
+  static const char* get_filename_only() {
+    char separator = os::file_separator()[0];
+    const char* p = strrchr(_filename, separator);
+    return p ? p+1 : _filename;
+  }
 
   static bool should_report_bug(unsigned int id) {
     return (id != OOM_MALLOC_ERROR) && (id != OOM_MMAP_ERROR);

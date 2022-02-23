@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -956,7 +956,7 @@ var getJibProfilesProfiles = function (input, common, data) {
             target_cpu: input.build_cpu,
             dependencies: [
                 "jtreg", "gnumake", "boot_jdk", "devkit", "jib", "jcov", testedProfileJdk,
-                testedProfileTest
+                testedProfileTest, testedProfile + ".jdk_symbols",
             ],
             src: "src.conf",
             make_args: testOnlyMake,
@@ -964,7 +964,8 @@ var getJibProfilesProfiles = function (input, common, data) {
                 "BOOT_JDK": common.boot_jdk_home,
                 "JT_HOME": input.get("jtreg", "home_path"),
                 "JDK_IMAGE_DIR": input.get(testedProfileJdk, "home_path"),
-                "TEST_IMAGE_DIR": input.get(testedProfileTest, "home_path")
+                "TEST_IMAGE_DIR": input.get(testedProfileTest, "home_path"),
+                "SYMBOLS_IMAGE_DIR": input.get(testedProfile + ".jdk_symbols", "home_path")
             },
             labels: "test"
         }
@@ -1003,17 +1004,6 @@ var getJibProfilesProfiles = function (input, common, data) {
         };
         profiles["run-test"] = concatObjects(profiles["run-test"], macosxRunTestExtra);
         profiles["run-test-prebuilt"] = concatObjects(profiles["run-test-prebuilt"], macosxRunTestExtra);
-    }
-    // On windows we want the debug symbols available at test time
-    if (input.build_os == "windows") {
-        windowsRunTestPrebuiltExtra = {
-            dependencies: [ testedProfile + ".jdk_symbols" ],
-            environment: {
-                "SYMBOLS_IMAGE_DIR": input.get(testedProfile + ".jdk_symbols", "home_path"),
-            }
-        };
-        profiles["run-test-prebuilt"] = concatObjects(profiles["run-test-prebuilt"],
-            windowsRunTestPrebuiltExtra);
     }
 
     // The profile run-test-prebuilt defines src.conf as the src bundle. When
@@ -1169,8 +1159,15 @@ var getJibProfilesDependencies = function (input, common) {
         },
 
         jcov: {
+            // Use custom build of JCov
+            // See CODETOOLS-7902734 for more info.
+            // server: "jpg",
+            // product: "jcov",
+            // version: "3.0",
+            // build_number: "b07",
+            // file: "bundles/jcov-3_0.zip",
             organization: common.organization,
-            revision: "3.0-12-jdk-asm+1.0",
+            revision: "3.0-9-jdk-asm+1.0",
             ext: "zip",
             environment_name: "JCOV_HOME",
         },
@@ -1424,10 +1421,7 @@ var getVersion = function (feature, interim, update, patch, extra1, extra2, extr
  * other version inputs
  */
 var versionArgs = function(input, common) {
-    var args = [];
-    if (common.build_number != 0) {
-        args = concat(args, "--with-version-build=" + common.build_number);
-    }
+    var args = ["--with-version-build=" + common.build_number];
     if (input.build_type == "promoted") {
         args = concat(args,
                       "--with-version-pre=" + version_numbers.get("DEFAULT_PROMOTED_VERSION_PRE"),
