@@ -1788,11 +1788,11 @@ void Node::dump(const char* suffix, bool mark, outputStream *st) const {
 
   const Type *t = bottom_type();
 
-  if (t != NULL && (t->isa_instptr() || t->isa_klassptr())) {
+  if (t != NULL && (t->isa_instptr() || t->isa_instklassptr())) {
     const TypeInstPtr  *toop = t->isa_instptr();
-    const TypeKlassPtr *tkls = t->isa_klassptr();
-    ciKlass*           klass = toop ? toop->klass() : (tkls ? tkls->klass() : NULL );
-    if (klass && klass->is_loaded() && klass->is_interface()) {
+    const TypeInstKlassPtr *tkls = t->isa_instklassptr();
+    ciKlass*           klass = toop ? toop->instance_klass() : (tkls ? tkls->instance_klass() : NULL );
+    if (klass && klass->is_loaded() && ((toop && toop->is_interface()) || (tkls && tkls->is_interface()))) {
       st->print("  Interface:");
     } else if (toop) {
       st->print("  Oop:");
@@ -2387,9 +2387,9 @@ Node* Node::find_similar(int opc) {
 }
 
 
-//--------------------------unique_ctrl_out_or_null-------------------------
+//--------------------------unique_ctrl_out------------------------------
 // Return the unique control out if only one. Null if none or more than one.
-Node* Node::unique_ctrl_out_or_null() const {
+Node* Node::unique_ctrl_out() const {
   Node* found = NULL;
   for (uint i = 0; i < outcnt(); i++) {
     Node* use = raw_out(i);
@@ -2401,14 +2401,6 @@ Node* Node::unique_ctrl_out_or_null() const {
     }
   }
   return found;
-}
-
-//--------------------------unique_ctrl_out------------------------------
-// Return the unique control out. Asserts if none or more than one control out.
-Node* Node::unique_ctrl_out() const {
-  Node* ctrl = unique_ctrl_out_or_null();
-  assert(ctrl != NULL, "control out is assumed to be unique");
-  return ctrl;
 }
 
 void Node::ensure_control_or_add_prec(Node* c) {
