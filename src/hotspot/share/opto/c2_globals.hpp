@@ -112,6 +112,11 @@
   notproduct(bool, PrintIdeal, false,                                       \
           "Print ideal graph before code generation")                       \
                                                                             \
+  notproduct(uintx, PrintIdealLevel, 0,                                     \
+          "Print ideal IR on stdout. "                                      \
+          "Same levels as PrintIdealGraphLevel")                            \
+          range(0, 4)                                                       \
+                                                                            \
   notproduct(uintx, PrintIdealIndentThreshold, 0,                           \
           "A depth threshold of ideal graph. Indentation is disabled "      \
           "when users attempt to dump an ideal graph deeper than it.")      \
@@ -764,6 +769,14 @@
           "to stress handling of long counted loops: run inner loop"        \
           "for at most jint_max / StressLongCountedLoop")                   \
           range(0, max_juint)                                               \
+                                                                            \
+  product(bool, DuplicateBackedge, true,                                    \
+          "Transform loop with a merge point into 2 loops if inner loop is" \
+          "expected to optimize better")                                    \
+                                                                            \
+  develop(bool, StressDuplicateBackedge, false,                             \
+          "Run DuplicateBackedge whenever possible ignoring benefit"        \
+          "analysis")                                                       \
                                                                             \
   product(bool, VerifyReceiverTypes, trueInDebug, DIAGNOSTIC,               \
           "Verify receiver types at runtime")                               \
