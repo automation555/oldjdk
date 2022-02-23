@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2016, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -83,6 +83,10 @@ public class InputBlock {
         return name;
     }
 
+    public void setName(String name) {
+        this.name = name;
+    }
+
     public List<InputNode> getNodes() {
         return Collections.unmodifiableList(nodes);
     }
@@ -110,5 +114,9 @@ public class InputBlock {
         if (!successors.contains(b)) {
             successors.add(b);
         }
+    }
+
+    void removeSuccessor(InputBlock b) {
+        successors.remove(b);
     }
 }
