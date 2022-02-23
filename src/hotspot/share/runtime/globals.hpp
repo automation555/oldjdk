@@ -1528,13 +1528,13 @@ const intx ObjectAlignmentInBytes = 8;
           range(1, 1024)                                                    \
           constraint(CodeCacheSegmentSizeConstraintFunc, AfterErgo)         \
                                                                             \
-  product_pd(intx, CodeEntryAlignment, EXPERIMENTAL,                        \
+  develop_pd(intx, CodeEntryAlignment,                                      \
           "Code entry alignment for generated code (in bytes)")             \
           constraint(CodeEntryAlignmentConstraintFunc, AfterErgo)           \
                                                                             \
   product_pd(intx, OptoLoopAlignment,                                       \
           "Align inner loops to zero relative to this modulus")             \
-          range(1, 128)                                                     \
+          range(1, 16)                                                      \
           constraint(OptoLoopAlignmentConstraintFunc, AfterErgo)            \
                                                                             \
   product_pd(uintx, InitialCodeCacheSize,                                   \
@@ -1858,18 +1858,16 @@ const intx ObjectAlignmentInBytes = 8;
           "Pause and wait for keypress on exit if a debugger is attached")  \
                                                                             \
   product(bool, ExtendedDTraceProbes,    false,                             \
-          "(Deprecated) Enable performance-impacting dtrace probes. "       \
-          "Use the combination of -XX:+DTraceMethodProbes, "                \
-          "-XX:+DTraceAllocProbes and -XX:+DTraceMonitorProbes instead.")   \
+          "Enable performance-impacting dtrace probes")                     \
                                                                             \
   product(bool, DTraceMethodProbes, false,                                  \
-          "Enable dtrace tool probes for method-entry and method-exit")     \
+          "Enable dtrace probes for method-entry and method-exit")          \
                                                                             \
   product(bool, DTraceAllocProbes, false,                                   \
-          "Enable dtrace tool probes for object allocation")                \
+          "Enable dtrace probes for object allocation")                     \
                                                                             \
   product(bool, DTraceMonitorProbes, false,                                 \
-          "Enable dtrace tool probes for monitor events")                   \
+          "Enable dtrace probes for monitor events")                        \
                                                                             \
   product(bool, RelaxAccessControlCheck, false,                             \
           "Relax the access control checks in the verifier")                \
@@ -2011,6 +2009,9 @@ const intx ObjectAlignmentInBytes = 8;
                                                                             \
   JFR_ONLY(product(ccstr, StartFlightRecording, NULL,                       \
           "Start flight recording with options"))                           \
+                                                                            \
+  product(int, StackBangStyle, 1, EXPERIMENTAL,                             \
+          "Use a particular stack bang style")                              \
                                                                             \
   product(bool, UseFastUnorderedTimeStamps, false, EXPERIMENTAL,            \
           "Use platform unstable time where supported for timestamps only") \
