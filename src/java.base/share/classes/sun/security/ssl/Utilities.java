@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -101,19 +101,14 @@ final class Utilities {
      *         not look like a FQDN
      */
     private static SNIHostName rawToSNIHostName(String hostname) {
-        // Is it a Fully-Qualified Domain Names (FQDN) ending with a dot?
-        if (hostname != null && hostname.endsWith(".")) {
-            // Remove the ending dot, which is not allowed in SNIHostName.
-            hostname = hostname.substring(0, hostname.length() - 1);
-        }
-
+        SNIHostName sniHostName = null;
         if (hostname != null && hostname.indexOf('.') > 0 &&
                 !hostname.endsWith(".") &&
                 !IPAddressUtil.isIPv4LiteralAddress(hostname) &&
                 !IPAddressUtil.isIPv6LiteralAddress(hostname)) {
 
             try {
-                return new SNIHostName(hostname);
+                sniHostName = new SNIHostName(hostname);
             } catch (IllegalArgumentException iae) {
                 // don't bother to handle illegal host_name
                 if (SSLLogger.isOn && SSLLogger.isOn("ssl")) {
@@ -123,7 +118,7 @@ final class Utilities {
             }
         }
 
-        return null;
+        return sniHostName;
     }
 
     /**
@@ -227,6 +222,16 @@ final class Utilities {
             i++;
             j--;
         }
+    }
+
+    static <T> boolean contains(T[] array, T item) {
+        for (T t : array) {
+            if (item.equals(t)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void swap(byte[] arr, int i, int j) {
