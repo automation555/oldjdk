@@ -163,6 +163,31 @@ public class WindowsHelper {
         .executeAndGetOutput().stream().collect(Collectors.joining("\n"));
     }
 
+    public static String getExecutableDesciption(Path pathToExeFile) {
+        String description = null;
+        Executor exec = Executor.of("powershell",
+                "-NoLogo",
+                "-NoProfile",
+                "-Command",
+                "(Get-Item \\\""
+                + pathToExeFile.toAbsolutePath()
+                + "\\\").VersionInfo | select FileDescription");
+        List<String> lines = exec.executeAndGetOutput();
+        for (int i = 0; i < lines.size(); i++) {
+            if (lines.get(i).trim().equals("FileDescription")) {
+                i += 2; // Skip "---------------" and move to description
+                description = lines.get(i).trim();
+            }
+        }
+
+        if (description == null) {
+            throw new RuntimeException(String.format(
+                    "Failed to get file description of [%s]", pathToExeFile));
+        }
+
+        return description;
+    }
+
     private static boolean isUserLocalInstall(JPackageCommand cmd) {
         return cmd.hasArgument("--win-per-user-install");
     }
