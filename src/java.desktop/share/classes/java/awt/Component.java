@@ -214,6 +214,7 @@ import static sun.java2d.pipe.hw.ExtendedBufferCapabilities.VSyncType.VSYNC_ON;
  * @author      Arthur van Hoff
  * @author      Sami Shaio
  */
+@SuppressWarnings("doclint:missing")
 public abstract class Component implements ImageObserver, MenuContainer,
                                            Serializable
 {
@@ -3475,8 +3476,8 @@ public abstract class Component implements ImageObserver, MenuContainer,
                     y = 0;
                 }
 
-                int pwidth = (width > this.width) ? this.width : width;
-                int pheight = (height > this.height) ? this.height : height;
+                int pwidth = Math.min(width, this.width);
+                int pheight = Math.min(height, this.height);
 
                 if (pwidth <= 0 || pheight <= 0) {
                     return;
@@ -4132,9 +4133,7 @@ public abstract class Component implements ImageObserver, MenuContainer,
         }
 
         /**
-         * Provides direct access to the back buffer as an image.
-         *
-         * @return the back buffer as an image
+         * @return direct access to the back buffer, as an image.
          * @exception IllegalStateException if the buffers have not yet
          * been created
          */
@@ -4694,11 +4693,8 @@ public abstract class Component implements ImageObserver, MenuContainer,
     }
 
     /**
-     * Returns whether or not paint messages received from the operating system
-     * should be ignored.
-     *
      * @return whether or not paint messages received from the operating system
-     * should be ignored
+     * should be ignored.
      *
      * @since 1.4
      * @see #setIgnoreRepaint
