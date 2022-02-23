@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2000, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,12 +36,22 @@ class StringCoding {
 
     @IntrinsicCandidate
     public static boolean hasNegatives(byte[] ba, int off, int len) {
-        for (int i = off; i < off + len; i++) {
+        return countPositives(ba, off, len) != len;
+    }
+
+    /**
+     * Count the number of consecutive, leading positive bytes in the
+     * range.
+     */
+    @IntrinsicCandidate
+    public static int countPositives(byte[] ba, int off, int len) {
+        int limit = off + len;
+        for (int i = off; i < limit; i++) {
             if (ba[i] < 0) {
-                return true;
+                return i - off;
             }
         }
-        return false;
+        return len;
     }
 
     @IntrinsicCandidate

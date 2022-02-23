@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2015, 2021, Red Hat, Inc. All rights reserved.
- * Copyright (C) 2022 THL A29 Limited, a Tencent company. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -569,6 +568,8 @@ void ShenandoahBarrierC2Support::verify(RootNode* root) {
         { { 2, ShenandoahLoad },                  { 3, ShenandoahStore } },
         Op_HasNegatives,
         { { 2, ShenandoahLoad },                  { -1, ShenandoahNone} },
+        Op_CountPositives,
+        { { 2, ShenandoahLoad },                  { -1, ShenandoahNone} },
         Op_CastP2X,
         { { 1, ShenandoahLoad },                  { -1, ShenandoahNone} },
         Op_StrIndexOfChar,
@@ -707,7 +708,7 @@ Node* ShenandoahBarrierC2Support::no_branches(Node* c, Node* dom, bool allow_one
   Node* iffproj = NULL;
   while (c != dom) {
     Node* next = phase->idom(c);
-    assert(next->unique_ctrl_out_or_null() == c || c->is_Proj() || c->is_Region(), "multiple control flow out but no proj or region?");
+    assert(next->unique_ctrl_out() == c || c->is_Proj() || c->is_Region(), "multiple control flow out but no proj or region?");
     if (c->is_Region()) {
       ResourceMark rm;
       Unique_Node_List wq;
