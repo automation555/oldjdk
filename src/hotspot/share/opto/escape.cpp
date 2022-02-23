@@ -41,7 +41,7 @@
 #include "opto/rootnode.hpp"
 #include "utilities/macros.hpp"
 
-ConnectionGraph::ConnectionGraph(Compile * C, PhaseIterGVN *igvn, int invocation) :
+ConnectionGraph::ConnectionGraph(Compile * C, PhaseIterGVN *igvn) :
   _nodes(C->comp_arena(), C->unique(), C->unique(), NULL),
   _in_worklist(C->comp_arena()),
   _next_pidx(0),
@@ -49,9 +49,6 @@ ConnectionGraph::ConnectionGraph(Compile * C, PhaseIterGVN *igvn, int invocation
   _verify(false),
   _compile(C),
   _igvn(igvn),
-  _invocation(invocation),
-  _build_iterations(0),
-  _build_time(0.),
   _node_map(C->comp_arena()) {
   // Add unknown java object.
   add_java_object(C->top(), PointsToNode::GlobalEscape);
@@ -99,11 +96,7 @@ void ConnectionGraph::do_analysis(Compile *C, PhaseIterGVN *igvn) {
   // to create space for them in ConnectionGraph::_nodes[].
   Node* oop_null = igvn->zerocon(T_OBJECT);
   Node* noop_null = igvn->zerocon(T_NARROWOOP);
-  int invocation = 0;
-  if (C->congraph() != NULL) {
-    invocation = C->congraph()->_invocation + 1;
-  }
-  ConnectionGraph* congraph = new(C->comp_arena()) ConnectionGraph(C, igvn, invocation);
+  ConnectionGraph* congraph = new(C->comp_arena()) ConnectionGraph(C, igvn);
   // Perform escape analysis
   if (congraph->compute_escape()) {
     // There are non escaping objects.
@@ -889,11 +882,10 @@ void ConnectionGraph::add_call_node(CallNode* call) {
     Node* k = call->in(AllocateNode::KlassNode);
     const TypeKlassPtr* kt = k->bottom_type()->isa_klassptr();
     assert(kt != NULL, "TypeKlassPtr  required.");
-    ciKlass* cik = kt->klass();
     PointsToNode::EscapeState es = PointsToNode::NoEscape;
     bool scalar_replaceable = true;
     if (call->is_AllocateArray()) {
-      if (!cik->is_array_klass()) { // StressReflectiveCode
+      if (!kt->isa_aryklassptr()) { // StressReflectiveCode
         es = PointsToNode::GlobalEscape;
       } else {
         int length = call->in(AllocateNode::ALength)->find_int_con(-1);
@@ -903,17 +895,22 @@ void ConnectionGraph::add_call_node(CallNode* call) {
         }
       }
     } else {  // Allocate instance
-      if (cik->is_subclass_of(_compile->env()->Thread_klass()) ||
-          cik->is_subclass_of(_compile->env()->Reference_klass()) ||
-         !cik->is_instance_klass() || // StressReflectiveCode
-         !cik->as_instance_klass()->can_be_instantiated() ||
-          cik->as_instance_klass()->has_finalizer()) {
+      if (!kt->isa_instklassptr()) { // StressReflectiveCode
         es = PointsToNode::GlobalEscape;
       } else {
-        int nfields = cik->as_instance_klass()->nof_nonstatic_fields();
-        if (nfields > EliminateAllocationFieldsLimit) {
-          // Not scalar replaceable if there are too many fields.
-          scalar_replaceable = false;
+        const TypeInstKlassPtr* ikt = kt->is_instklassptr();
+        ciInstanceKlass* ik = ikt->klass_is_exact() ? ikt->exact_klass()->as_instance_klass() : ikt->instance_klass();
+        if (ik->is_subclass_of(_compile->env()->Thread_klass()) ||
+            ik->is_subclass_of(_compile->env()->Reference_klass()) ||
+            !ik->can_be_instantiated() ||
+            ik->has_finalizer()) {
+          es = PointsToNode::GlobalEscape;
+        } else {
+          int nfields = ik->as_instance_klass()->nof_nonstatic_fields();
+          if (nfields > EliminateAllocationFieldsLimit) {
+            // Not scalar replaceable if there are too many fields.
+            scalar_replaceable = false;
+          }
         }
       }
     }
@@ -1054,8 +1051,8 @@ void ConnectionGraph::process_call_arguments(CallNode *call) {
           assert(aat == Type::TOP || aat == TypePtr::NULL_PTR ||
                  aat->isa_ptr() != NULL, "expecting an Ptr");
           bool arg_has_oops = aat->isa_oopptr() &&
-                              (aat->isa_oopptr()->klass() == NULL || aat->isa_instptr() ||
-                               (aat->isa_aryptr() && aat->isa_aryptr()->klass()->is_obj_array_klass()));
+                              (aat->isa_instptr() ||
+                               (aat->isa_aryptr() && (aat->isa_aryptr()->elem() == Type::BOTTOM || aat->isa_aryptr()->elem()->make_oopptr() != NULL)));
           if (i == TypeFunc::Parms) {
             src_has_oops = arg_has_oops;
           }
@@ -1333,12 +1330,18 @@ bool ConnectionGraph::complete_connection_graph(
       C->log()->text("%s", timeout ? "time" : "iterations");
       C->log()->end_elem(" limit'");
     }
-    assert(ExitEscapeAnalysisOnTimeout, "infinite EA connection graph build during invocation %d (%f sec, %d iterations) with %d nodes and worklist size %d",
-           _invocation, _build_time, _build_iterations, nodes_size(), ptnodes_worklist.length());
+    assert(ExitEscapeAnalysisOnTimeout, "infinite EA connection graph build (%f sec, %d iterations) with %d nodes and worklist size %d",
+           _build_time, _build_iterations, nodes_size(), ptnodes_worklist.length());
     // Possible infinite build_connection_graph loop,
     // bailout (no changes to ideal graph were made).
     return false;
   }
+#ifdef ASSERT
+  if (Verbose && PrintEscapeAnalysis) {
+    tty->print_cr("EA: %d iterations and %f sec to build connection graph with %d nodes and worklist size %d",
+                  _build_iterations, _build_time, nodes_size(), ptnodes_worklist.length());
+  }
+#endif
 
 #undef GRAPH_BUILD_ITER_LIMIT
 
@@ -2177,8 +2180,8 @@ bool ConnectionGraph::is_oop_field(Node* n, int offset, bool* unsafe) {
   if (offset == Type::OffsetBot) {
     // Check only oop fields.
     if (!adr_type->isa_aryptr() ||
-        (adr_type->isa_aryptr()->klass() == NULL) ||
-         adr_type->isa_aryptr()->klass()->is_obj_array_klass()) {
+        adr_type->isa_aryptr()->elem() == Type::BOTTOM ||
+        adr_type->isa_aryptr()->elem()->make_oopptr() != NULL) {
       // OffsetBot is used to reference array's element. Ignore first AddP.
       if (find_second_addp(n, n->in(AddPNode::Base)) == NULL) {
         bt = T_OBJECT;
@@ -2569,7 +2572,7 @@ bool ConnectionGraph::split_AddP(Node *addp, Node *base) {
   // this code branch will go away.
   //
   if (!t->is_known_instance() &&
-      !base_t->klass()->is_subtype_of(t->klass())) {
+      !t->maybe_java_subtype_of(base_t)) {
      return false; // bail out
   }
   const TypeOopPtr *tinst = base_t->add_offset(t->offset())->is_oopptr();
@@ -2646,7 +2649,7 @@ PhiNode *ConnectionGraph::create_split_phi(PhiNode *orig_phi, int alias_idx, Gro
       // Retry compilation without escape analysis.
       // If this is the first failure, the sentinel string will "stick"
       // to the Compile object, and the C2Compiler will see it and retry.
-      C->record_failure(_invocation > 0 ? C2Compiler::retry_no_iterative_escape_analysis() : C2Compiler::retry_no_escape_analysis());
+      C->record_failure(C2Compiler::retry_no_escape_analysis());
     }
     return NULL;
   }
@@ -2735,8 +2738,8 @@ Node* ConnectionGraph::step_through_mergemem(MergeMemNode *mmem, int alias_idx, 
   // means an array I have not precisely typed yet.  Do not do any
   // alias stuff with it any time soon.
   if (toop->base() != Type::AnyPtr &&
-      !(toop->klass() != NULL &&
-        toop->klass()->is_java_lang_Object() &&
+      !(toop->isa_instptr() &&
+        toop->is_instptr()->instance_klass()->is_java_lang_Object() &&
         toop->offset() == Type::OffsetBot)) {
     mem = mmem->memory_at(alias_idx);
     // Update input if it is progress over what we have now
@@ -3217,7 +3220,7 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
         ptnode_adr(n->_idx)->dump();
         assert(jobj != NULL && jobj != phantom_obj, "escaped allocation");
 #endif
-        _compile->record_failure(_invocation > 0 ? C2Compiler::retry_no_iterative_escape_analysis() : C2Compiler::retry_no_escape_analysis());
+        _compile->record_failure(C2Compiler::retry_no_escape_analysis());
         return;
       }
       Node *base = get_map(jobj->idx());  // CheckCastPP node
@@ -3237,7 +3240,7 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
         ptnode_adr(n->_idx)->dump();
         assert(jobj != NULL && jobj != phantom_obj, "escaped allocation");
 #endif
-        _compile->record_failure(_invocation > 0 ? C2Compiler::retry_no_iterative_escape_analysis() : C2Compiler::retry_no_escape_analysis());
+        _compile->record_failure(C2Compiler::retry_no_escape_analysis());
         return;
       } else {
         Node *val = get_map(jobj->idx());   // CheckCastPP node
@@ -3253,7 +3256,7 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
         } else {
           tn_t = tn_type->isa_oopptr();
         }
-        if (tn_t != NULL && tinst->klass()->is_subtype_of(tn_t->klass())) {
+        if (tn_t != NULL && tn_t->maybe_java_subtype_of(tinst)) {
           if (tn_type->isa_narrowoop()) {
             tn_type = tinst->make_narrowoop();
           } else {
@@ -3266,7 +3269,7 @@ void ConnectionGraph::split_unique_types(GrowableArray<Node *>  &alloc_worklist,
           record_for_optimizer(n);
         } else {
           assert(tn_type == TypePtr::NULL_PTR ||
-                 tn_t != NULL && !tinst->klass()->is_subtype_of(tn_t->klass()),
+                 tn_t != NULL && !tinst->is_java_subtype_of(tn_t),
                  "unexpected type");
           continue; // Skip dead path with different type
         }
@@ -3692,9 +3695,6 @@ void ConnectionGraph::dump(GrowableArray<PointsToNode*>& ptnodes_worklist) {
         tty->cr();
         tty->print("======== Connection graph for ");
         _compile->method()->print_short_name();
-        tty->cr();
-        tty->print_cr("invocation #%d: %d iterations and %f sec to build connection graph with %d nodes and worklist size %d",
-                      _invocation, _build_iterations, _build_time, nodes_size(), ptnodes_worklist.length());
         tty->cr();
         first = false;
       }

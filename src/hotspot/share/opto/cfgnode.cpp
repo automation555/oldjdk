@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -865,10 +865,10 @@ bool RegionNode::optimize_trichotomy(PhaseIterGVN* igvn) {
   }
   proj1 = proj1->other_if_proj();
   proj2 = proj2->other_if_proj();
-  if (!((proj1->unique_ctrl_out_or_null() == iff2 &&
-         proj2->unique_ctrl_out_or_null() == this) ||
-        (proj2->unique_ctrl_out_or_null() == iff1 &&
-         proj1->unique_ctrl_out_or_null() == this))) {
+  if (!((proj1->unique_ctrl_out() == iff2 &&
+         proj2->unique_ctrl_out() == this) ||
+        (proj2->unique_ctrl_out() == iff1 &&
+         proj1->unique_ctrl_out() == this))) {
     return false; // Ifs are not connected through other projs
   }
   // Found 'iff -> proj -> iff -> proj -> this' shape where all other projs are merged
@@ -1140,16 +1140,14 @@ const Type* PhiNode::Value(PhaseGVN* phase) const {
   // convert the one to the other.
   const TypePtr* ttp = _type->make_ptr();
   const TypeInstPtr* ttip = (ttp != NULL) ? ttp->isa_instptr() : NULL;
-  const TypeKlassPtr* ttkp = (ttp != NULL) ? ttp->isa_instklassptr() : NULL;
+  const TypeInstKlassPtr* ttkp = (ttp != NULL) ? ttp->isa_instklassptr() : NULL;
   bool is_intf = false;
   if (ttip != NULL) {
-    ciKlass* k = ttip->klass();
-    if (k->is_loaded() && k->is_interface())
+    if (ttip->is_interface())
       is_intf = true;
   }
   if (ttkp != NULL) {
-    ciKlass* k = ttkp->klass();
-    if (k->is_loaded() && k->is_interface())
+    if (ttkp->is_interface())
       is_intf = true;
   }
 
@@ -1168,8 +1166,7 @@ const Type* PhiNode::Value(PhaseGVN* phase) const {
       const TypeInstPtr* tiip = (tip != NULL) ? tip->isa_instptr() : NULL;
       if (tiip) {
         bool ti_is_intf = false;
-        ciKlass* k = tiip->klass();
-        if (k->is_loaded() && k->is_interface())
+        if (tiip->is_interface())
           ti_is_intf = true;
         if (is_intf != ti_is_intf)
           { t = _type; break; }
@@ -1207,14 +1204,14 @@ const Type* PhiNode::Value(PhaseGVN* phase) const {
     // be 'I' or 'j/l/O'.  Thus we'll pick 'j/l/O'.  If this then flows
     // into a Phi which "knows" it's an Interface type we'll have to
     // uplift the type.
-    if (!t->empty() && ttip && ttip->is_loaded() && ttip->klass()->is_interface()) {
+    if (!t->empty() && ttip && ttip->is_interface()) {
       assert(ft == _type, ""); // Uplift to interface
-    } else if (!t->empty() && ttkp && ttkp->is_loaded() && ttkp->klass()->is_interface()) {
+    } else if (!t->empty() && ttkp && ttkp->is_interface()) {
       assert(ft == _type, ""); // Uplift to interface
     } else {
       // We also have to handle 'evil cases' of interface- vs. class-arrays
       Type::get_arrays_base_elements(jt, _type, NULL, &ttip);
-      if (!t->empty() && ttip != NULL && ttip->is_loaded() && ttip->klass()->is_interface()) {
+      if (!t->empty() && ttip != NULL && ttip->is_interface()) {
           assert(ft == _type, "");   // Uplift to array of interface
       } else {
         // Otherwise it's something stupid like non-overlapping int ranges
@@ -1233,19 +1230,19 @@ const Type* PhiNode::Value(PhaseGVN* phase) const {
     // because the type system doesn't interact well with interfaces.
     const TypePtr *jtp = jt->make_ptr();
     const TypeInstPtr *jtip = (jtp != NULL) ? jtp->isa_instptr() : NULL;
-    const TypeKlassPtr *jtkp = (jtp != NULL) ? jtp->isa_instklassptr() : NULL;
-    if( jtip && ttip ) {
-      if( jtip->is_loaded() &&  jtip->klass()->is_interface() &&
-          ttip->is_loaded() && !ttip->klass()->is_interface() ) {
+    const TypeInstKlassPtr *jtkp = (jtp != NULL) ? jtp->isa_instklassptr() : NULL;
+    if (jtip && ttip) {
+      if (jtip->is_interface() &&
+          !ttip->is_interface()) {
         assert(ft == ttip->cast_to_ptr_type(jtip->ptr()) ||
                ft->isa_narrowoop() && ft->make_ptr() == ttip->cast_to_ptr_type(jtip->ptr()), "");
         jt = ft;
       }
     }
-    if( jtkp && ttkp ) {
-      if( jtkp->is_loaded() &&  jtkp->klass()->is_interface() &&
+    if (jtkp && ttkp) {
+      if (jtkp->is_interface() &&
           !jtkp->klass_is_exact() && // Keep exact interface klass (6894807)
-          ttkp->is_loaded() && !ttkp->klass()->is_interface() ) {
+          ttkp->is_loaded() && !ttkp->is_interface()) {
         assert(ft == ttkp->cast_to_ptr_type(jtkp->ptr()) ||
                ft->isa_narrowklass() && ft->make_ptr() == ttkp->cast_to_ptr_type(jtkp->ptr()), "");
         jt = ft;
@@ -2521,7 +2518,7 @@ bool PhiNode::is_data_loop(RegionNode* r, Node* uin, const PhaseGVN* phase) {
 //------------------------------is_tripcount-----------------------------------
 bool PhiNode::is_tripcount(BasicType bt) const {
   return (in(0) != NULL && in(0)->is_BaseCountedLoop() &&
-          in(0)->as_BaseCountedLoop()->bt() == bt &&
+          in(0)->as_BaseCountedLoop()->operates_on(bt, true) &&
           in(0)->as_BaseCountedLoop()->phi() == this);
 }
 
@@ -2687,17 +2684,6 @@ const Type* CatchNode::Value(PhaseGVN* phase) const {
       // Rethrows always throw exceptions, never return
       if (call->entry_point() == OptoRuntime::rethrow_stub()) {
         f[CatchProjNode::fall_through_index] = Type::TOP;
-      } else if (call->is_AllocateArray()) {
-        Node* klass_node = call->in(AllocateNode::KlassNode);
-        Node* length = call->in(AllocateNode::ALength);
-        const Type* length_type = phase->type(length);
-        const Type* klass_type = phase->type(klass_node);
-        Node* valid_length_test = call->in(AllocateNode::ValidLengthTest);
-        const Type* valid_length_test_t = phase->type(valid_length_test);
-        if (length_type == Type::TOP || klass_type == Type::TOP || valid_length_test_t == Type::TOP ||
-            valid_length_test_t->is_int()->is_con(0)) {
-          f[CatchProjNode::fall_through_index] = Type::TOP;
-        }
       } else if( call->req() > TypeFunc::Parms ) {
         const Type *arg0 = phase->type( call->in(TypeFunc::Parms) );
         // Check for null receiver to virtual or interface calls

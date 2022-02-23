@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -499,12 +499,6 @@ void Compile::print_compile_messages() {
     tty->print_cr("** Bailout: Recompile without escape analysis          **");
     tty->print_cr("*********************************************************");
   }
-  if (do_iterative_escape_analysis() != DoEscapeAnalysis && PrintOpto) {
-    // Recompiling without iterative escape analysis
-    tty->print_cr("*********************************************************");
-    tty->print_cr("** Bailout: Recompile without iterative escape analysis**");
-    tty->print_cr("*********************************************************");
-  }
   if ((eliminate_boxing() != EliminateAutoBox) && PrintOpto) {
     // Recompiling without boxing elimination
     tty->print_cr("*********************************************************");
@@ -535,26 +529,6 @@ void Compile::print_compile_messages() {
 #endif
 }
 
-#ifndef PRODUCT
-void Compile::print_ideal_ir(const char* phase_name) {
-  ttyLocker ttyl;
-  // keep the following output all in one block
-  // This output goes directly to the tty, not the compiler log.
-  // To enable tools to match it up with the compilation activity,
-  // be sure to tag this tty output with the compile ID.
-  if (xtty != NULL) {
-    xtty->head("ideal compile_id='%d'%s compile_phase='%s'",
-               compile_id(),
-               is_osr_compilation() ? " compile_kind='osr'" : "",
-               phase_name);
-  }
-  root()->dump(9999);
-  if (xtty != NULL) {
-    xtty->tail("ideal");
-  }
-}
-#endif
-
 // ============================================================================
 //------------------------------Compile standard-------------------------------
 debug_only( int Compile::_debug_idx = 100000; )
@@ -583,6 +557,7 @@ Compile::Compile( ciEnv* ci_env, ciMethod* target, int osr_bci,
 #ifndef PRODUCT
                   _igv_idx(0),
                   _trace_opto_output(directive->TraceOptoOutputOption),
+                  _print_ideal(directive->PrintIdealOption),
 #endif
                   _has_method_handle_invokes(false),
                   _clinit_barrier_on_entry(false),
@@ -601,7 +576,7 @@ Compile::Compile( ciEnv* ci_env, ciMethod* target, int osr_bci,
                   _for_post_loop_igvn(comp_arena(), 8, 0, NULL),
                   _coarsened_locks   (comp_arena(), 8, 0, NULL),
                   _congraph(NULL),
-                  NOT_PRODUCT(_igv_printer(NULL) COMMA)
+                  NOT_PRODUCT(_printer(NULL) COMMA)
                   _dead_node_list(comp_arena()),
                   _dead_node_count(0),
                   _node_arena(mtCompiler),
@@ -783,8 +758,8 @@ Compile::Compile( ciEnv* ci_env, ciMethod* target, int osr_bci,
   set_default_node_notes(NULL);
 
 #ifndef PRODUCT
-  if (should_print_igv(1)) {
-    _igv_printer->print_inlining();
+  if (should_print(1)) {
+    _printer->print_inlining();
   }
 #endif
 
@@ -811,8 +786,20 @@ Compile::Compile( ciEnv* ci_env, ciMethod* target, int osr_bci,
   NOT_PRODUCT( verify_graph_edges(); )
 
 #ifndef PRODUCT
-  if (should_print_ideal()) {
-    print_ideal_ir("print_ideal");
+  if (print_ideal()) {
+    ttyLocker ttyl;  // keep the following output all in one block
+    // This output goes directly to the tty, not the compiler log.
+    // To enable tools to match it up with the compilation activity,
+    // be sure to tag this tty output with the compile ID.
+    if (xtty != NULL) {
+      xtty->head("ideal compile_id='%d'%s", compile_id(),
+                 is_osr_compilation()    ? " compile_kind='osr'" :
+                 "");
+    }
+    root()->dump(9999);
+    if (xtty != NULL) {
+      xtty->tail("ideal");
+    }
   }
 #endif
 
@@ -868,6 +855,7 @@ Compile::Compile( ciEnv* ci_env,
 #ifndef PRODUCT
     _igv_idx(0),
     _trace_opto_output(directive->TraceOptoOutputOption),
+    _print_ideal(directive->PrintIdealOption),
 #endif
     _has_method_handle_invokes(false),
     _clinit_barrier_on_entry(false),
@@ -879,7 +867,7 @@ Compile::Compile( ciEnv* ci_env,
     _log(ci_env->log()),
     _failure_reason(NULL),
     _congraph(NULL),
-    NOT_PRODUCT(_igv_printer(NULL) COMMA)
+    NOT_PRODUCT(_printer(NULL) COMMA)
     _dead_node_list(comp_arena()),
     _dead_node_count(0),
     _node_arena(mtCompiler),
@@ -1294,7 +1282,7 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
   }
 
   // Array pointers need some flattening
-  const TypeAryPtr *ta = tj->isa_aryptr();
+  const TypeAryPtr* ta = tj->isa_aryptr();
   if (ta && ta->is_stable()) {
     // Erase stability property for alias analysis.
     tj = ta = ta->cast_to_stable(false);
@@ -1303,7 +1291,10 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
     if ( offset != Type::OffsetBot &&
          offset > arrayOopDesc::length_offset_in_bytes() ) {
       offset = Type::OffsetBot; // Flatten constant access into array body only
-      tj = ta = TypeAryPtr::make(ptr, ta->ary(), ta->klass(), true, offset, ta->instance_id());
+      tj = ta = ta->
+              remove_speculative()->
+              cast_to_ptr_type(ptr)->
+              with_offset(offset);
     }
   } else if( ta && _AliasLevel >= 2 ) {
     // For arrays indexed by constant indices, we flatten the alias
@@ -1312,7 +1303,11 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
     if( offset != Type::OffsetBot ) {
       if( ta->const_oop() ) { // MethodData* or Method*
         offset = Type::OffsetBot;   // Flatten constant access into array body
-        tj = ta = TypeAryPtr::make(ptr,ta->const_oop(),ta->ary(),ta->klass(),false,offset);
+        tj = ta = ta->
+                remove_speculative()->
+                cast_to_ptr_type(ptr)->
+                cast_to_exactness(false)->
+                with_offset(offset);
       } else if( offset == arrayOopDesc::length_offset_in_bytes() ) {
         // range is OK as-is.
         tj = ta = TypeAryPtr::RANGE;
@@ -1326,13 +1321,21 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
         ptr = TypePtr::BotPTR;
       } else {                  // Random constant offset into array body
         offset = Type::OffsetBot;   // Flatten constant access into array body
-        tj = ta = TypeAryPtr::make(ptr,ta->ary(),ta->klass(),false,offset);
+        tj = ta = ta->
+                remove_speculative()->
+                cast_to_ptr_type(ptr)->
+                cast_to_exactness(false)->
+                with_offset(offset);
       }
     }
     // Arrays of fixed size alias with arrays of unknown size.
     if (ta->size() != TypeInt::POS) {
       const TypeAry *tary = TypeAry::make(ta->elem(), TypeInt::POS);
-      tj = ta = TypeAryPtr::make(ptr,ta->const_oop(),tary,ta->klass(),false,offset);
+      tj = ta = ta->
+              remove_speculative()->
+              cast_to_ptr_type(ptr)->
+              with_ary(tary)->
+              cast_to_exactness(false);
     }
     // Arrays of known objects become arrays of unknown objects.
     if (ta->elem()->isa_narrowoop() && ta->elem() != TypeNarrowOop::BOTTOM) {
@@ -1354,21 +1357,29 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
     // Make sure the Bottom and NotNull variants alias the same.
     // Also, make sure exact and non-exact variants alias the same.
     if (ptr == TypePtr::NotNull || ta->klass_is_exact() || ta->speculative() != NULL) {
-      tj = ta = TypeAryPtr::make(TypePtr::BotPTR,ta->ary(),ta->klass(),false,offset);
+      tj = ta = ta->
+              remove_speculative()->
+              cast_to_ptr_type(TypePtr::BotPTR)->
+              cast_to_exactness(false)->
+              with_offset(offset);
     }
   }
 
   // Oop pointers need some flattening
   const TypeInstPtr *to = tj->isa_instptr();
   if( to && _AliasLevel >= 2 && to != TypeOopPtr::BOTTOM ) {
-    ciInstanceKlass *k = to->klass()->as_instance_klass();
+    ciInstanceKlass* ik = to->instance_klass();
     if( ptr == TypePtr::Constant ) {
-      if (to->klass() != ciEnv::current()->Class_klass() ||
-          offset < k->layout_helper_size_in_bytes()) {
+      if (ik != ciEnv::current()->Class_klass() ||
+          offset < ik->layout_helper_size_in_bytes()) {
         // No constant oop pointers (such as Strings); they alias with
         // unknown strings.
         assert(!is_known_inst, "not scalarizable allocation");
-        tj = to = TypeInstPtr::make(TypePtr::BotPTR,to->klass(),false,0,offset);
+        tj = to = to->
+                cast_to_instance_id(TypeOopPtr::InstanceBot)->
+                remove_speculative()->
+                cast_to_ptr_type(TypePtr::BotPTR)->
+                cast_to_exactness(false);
       }
     } else if( is_known_inst ) {
       tj = to; // Keep NotNull and klass_is_exact for instance type
@@ -1376,10 +1387,14 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
       // During the 2nd round of IterGVN, NotNull castings are removed.
       // Make sure the Bottom and NotNull variants alias the same.
       // Also, make sure exact and non-exact variants alias the same.
-      tj = to = TypeInstPtr::make(TypePtr::BotPTR,to->klass(),false,0,offset);
+      tj = to = to->
+              remove_speculative()->
+              cast_to_instance_id(TypeOopPtr::InstanceBot)->
+              cast_to_ptr_type(TypePtr::BotPTR)->
+              cast_to_exactness(false);
     }
     if (to->speculative() != NULL) {
-      tj = to = TypeInstPtr::make(to->ptr(),to->klass(),to->klass_is_exact(),to->const_oop(),to->offset(), to->instance_id());
+      tj = to = to->remove_speculative();
     }
     // Canonicalize the holder of this field
     if (offset >= 0 && offset < instanceOopDesc::base_offset_in_bytes()) {
@@ -1388,18 +1403,18 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
       if (!is_known_inst) { // Do it only for non-instance types
         tj = to = TypeInstPtr::make(TypePtr::BotPTR, env()->Object_klass(), false, NULL, offset);
       }
-    } else if (offset < 0 || offset >= k->layout_helper_size_in_bytes()) {
+    } else if (offset < 0 || offset >= ik->layout_helper_size_in_bytes()) {
       // Static fields are in the space above the normal instance
       // fields in the java.lang.Class instance.
-      if (to->klass() != ciEnv::current()->Class_klass()) {
+      if (ik != ciEnv::current()->Class_klass()) {
         to = NULL;
         tj = TypeOopPtr::BOTTOM;
         offset = tj->offset();
       }
     } else {
-      ciInstanceKlass *canonical_holder = k->get_canonical_holder(offset);
+      ciInstanceKlass *canonical_holder = ik->get_canonical_holder(offset);
       assert(offset < canonical_holder->layout_helper_size_in_bytes(), "");
-      if (!k->equals(canonical_holder) || tj->offset() != offset) {
+      if (!ik->equals(canonical_holder) || tj->offset() != offset) {
         if( is_known_inst ) {
           tj = to = TypeInstPtr::make(to->ptr(), canonical_holder, true, NULL, offset, to->instance_id());
         } else {
@@ -1417,18 +1432,18 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
     // inexact types must flatten to the same alias class so
     // use NotNull as the PTR.
     if ( offset == Type::OffsetBot || (offset >= 0 && (size_t)offset < sizeof(Klass)) ) {
-
-      tj = tk = TypeKlassPtr::make(TypePtr::NotNull,
-                                   TypeInstKlassPtr::OBJECT->klass(),
-                                   offset);
+      tj = tk = TypeInstKlassPtr::make(TypePtr::NotNull,
+                                       env()->Object_klass(),
+                                       offset);
     }
 
-    ciKlass* klass = tk->klass();
-    if( klass->is_obj_array_klass() ) {
-      ciKlass* k = TypeAryPtr::OOPS->klass();
-      if( !k || !k->is_loaded() )                  // Only fails for some -Xcomp runs
-        k = TypeInstPtr::BOTTOM->klass();
-      tj = tk = TypeKlassPtr::make( TypePtr::NotNull, k, offset );
+    if (tk->isa_aryklassptr() && tk->is_aryklassptr()->elem()->isa_klassptr()) {
+      ciKlass* k = ciObjArrayKlass::make(env()->Object_klass());
+      if (!k || !k->is_loaded()) {                  // Only fails for some -Xcomp runs
+        tj = tk = TypeInstKlassPtr::make(TypePtr::NotNull, env()->Object_klass(), offset);
+      } else {
+        tj = tk = TypeAryKlassPtr::make(TypePtr::NotNull, tk->is_aryklassptr()->elem(), k, offset);
+      }
     }
 
     // Check for precise loads from the primary supertype array and force them
@@ -1444,7 +1459,7 @@ const TypePtr *Compile::flatten_alias_type( const TypePtr *tj ) const {
          offset < (int)(primary_supers_offset + Klass::primary_super_limit() * wordSize)) ||
         offset == (int)in_bytes(Klass::secondary_super_cache_offset())) {
       offset = in_bytes(Klass::secondary_super_cache_offset());
-      tj = tk = TypeKlassPtr::make( TypePtr::NotNull, tk->klass(), offset );
+      tj = tk = tk->with_offset(offset);
     }
   }
 
@@ -1543,7 +1558,7 @@ void Compile::AliasType::print_on(outputStream* st) {
   adr_type()->dump_on(st);
   const TypeOopPtr* tjp = adr_type()->isa_oopptr();
   if (field() != NULL && tjp) {
-    if (tjp->klass()  != field()->holder() ||
+    if (tjp->is_instptr()->instance_klass()  != field()->holder() ||
         tjp->offset() != field()->offset_in_bytes()) {
       st->print(" != ");
       field()->print();
@@ -1638,7 +1653,7 @@ Compile::AliasType* Compile::find_alias_type(const TypePtr* adr_type, bool no_cr
     if (flat == TypeAryPtr::RANGE)   alias_type(idx)->set_rewritable(false);
     if (flat->isa_instptr()) {
       if (flat->offset() == java_lang_Class::klass_offset()
-          && flat->is_instptr()->klass() == env()->Class_klass())
+          && flat->is_instptr()->instance_klass() == env()->Class_klass())
         alias_type(idx)->set_rewritable(false);
     }
     if (flat->isa_aryptr()) {
@@ -1672,13 +1687,13 @@ Compile::AliasType* Compile::find_alias_type(const TypePtr* adr_type, bool no_cr
     if (tinst && tinst->offset() >= instanceOopDesc::base_offset_in_bytes()) {
       ciField* field;
       if (tinst->const_oop() != NULL &&
-          tinst->klass() == ciEnv::current()->Class_klass() &&
-          tinst->offset() >= (tinst->klass()->as_instance_klass()->layout_helper_size_in_bytes())) {
+          tinst->instance_klass() == ciEnv::current()->Class_klass() &&
+          tinst->offset() >= (tinst->instance_klass()->layout_helper_size_in_bytes())) {
         // static field
         ciInstanceKlass* k = tinst->const_oop()->as_instance()->java_lang_Class_klass()->as_instance_klass();
         field = k->get_field_by_offset(tinst->offset(), true);
       } else {
-        ciInstanceKlass *k = tinst->klass()->as_instance_klass();
+        ciInstanceKlass *k = tinst->instance_klass();
         field = k->get_field_by_offset(tinst->offset(), false);
       }
       assert(field == NULL ||
@@ -1892,7 +1907,7 @@ bool Compile::inline_incrementally_one() {
         return false;
       } else if (inlining_progress()) {
         _late_inlines_pos = i+1; // restore the position in case new elements were inserted
-        print_method(PHASE_INCREMENTAL_INLINE_STEP, 3, cg->call_node());
+        print_method(PHASE_INCREMENTAL_INLINE_STEP, cg->call_node(), 3);
         break; // process one call site at a time
       }
     } else {
@@ -2086,7 +2101,7 @@ void Compile::Optimize() {
 
   NOT_PRODUCT( verify_graph_edges(); )
 
-  print_method(PHASE_AFTER_PARSING, 1);
+  print_method(PHASE_AFTER_PARSING);
 
  {
   // Iterative Global Value Numbering, including ideal transforms
@@ -2173,37 +2188,27 @@ void Compile::Optimize() {
       if (major_progress()) print_method(PHASE_PHASEIDEAL_BEFORE_EA, 2);
       if (failing())  return;
     }
-    bool progress;
-    do {
-      ConnectionGraph::do_analysis(this, &igvn);
+    ConnectionGraph::do_analysis(this, &igvn);
 
-      if (failing())  return;
+    if (failing())  return;
 
-      int mcount = macro_count(); // Record number of allocations and locks before IGVN
+    // Optimize out fields loads from scalar replaceable allocations.
+    igvn.optimize();
+    print_method(PHASE_ITER_GVN_AFTER_EA, 2);
 
-      // Optimize out fields loads from scalar replaceable allocations.
+    if (failing())  return;
+
+    if (congraph() != NULL && macro_count() > 0) {
+      TracePhase tp("macroEliminate", &timers[_t_macroEliminate]);
+      PhaseMacroExpand mexp(igvn);
+      mexp.eliminate_macro_nodes();
+      igvn.set_delay_transform(false);
+
       igvn.optimize();
-      print_method(PHASE_ITER_GVN_AFTER_EA, 2);
+      print_method(PHASE_ITER_GVN_AFTER_ELIMINATION, 2);
 
       if (failing())  return;
-
-      if (congraph() != NULL && macro_count() > 0) {
-        TracePhase tp("macroEliminate", &timers[_t_macroEliminate]);
-        PhaseMacroExpand mexp(igvn);
-        mexp.eliminate_macro_nodes();
-        igvn.set_delay_transform(false);
-
-        igvn.optimize();
-        print_method(PHASE_ITER_GVN_AFTER_ELIMINATION, 2);
-
-        if (failing())  return;
-      }
-      progress = do_iterative_escape_analysis() &&
-                 (macro_count() < mcount) &&
-                 ConnectionGraph::has_candidates(this);
-      // Try again if candidates exist and made progress
-      // by removing some allocations and/or locks.
-    } while (progress);
+    }
   }
 
   // Loop transforms on the ideal graph.  Range Check Elimination,
@@ -2357,7 +2362,7 @@ void Compile::inline_vector_reboxing_calls() {
       CallGenerator* cg = _vector_reboxing_late_inlines.pop();
       cg->do_late_inline();
       if (failing())  return;
-      print_method(PHASE_INLINE_VECTOR_REBOX, 3, cg->call_node());
+      print_method(PHASE_INLINE_VECTOR_REBOX, cg->call_node());
     }
     _vector_reboxing_late_inlines.trunc_to(0);
   }
@@ -2381,6 +2386,7 @@ bool Compile::has_vbox_nodes() {
 
 static bool is_vector_unary_bitwise_op(Node* n) {
   return n->Opcode() == Op_XorV &&
+         n->req() == 2 &&
          VectorNode::is_vector_bitwise_not_pattern(n);
 }
 
@@ -2388,7 +2394,7 @@ static bool is_vector_binary_bitwise_op(Node* n) {
   switch (n->Opcode()) {
     case Op_AndV:
     case Op_OrV:
-      return true;
+      return n->req() == 2;
 
     case Op_XorV:
       return !is_vector_unary_bitwise_op(n);
@@ -2420,12 +2426,11 @@ static bool is_vector_bitwise_cone_root(Node* n) {
   return true;
 }
 
-static uint collect_unique_inputs(Node* n, Unique_Node_List& inputs) {
+static uint collect_unique_inputs(Node* n, Unique_Node_List& partition, Unique_Node_List& inputs) {
   uint cnt = 0;
   if (is_vector_bitwise_op(n)) {
-    uint inp_cnt = n->is_predicated_vector() ? n->req()-1 : n->req();
     if (VectorNode::is_vector_bitwise_not_pattern(n)) {
-      for (uint i = 1; i < inp_cnt; i++) {
+      for (uint i = 1; i < n->req(); i++) {
         Node* in = n->in(i);
         bool skip = VectorNode::is_all_ones_vector(in);
         if (!skip && !inputs.member(in)) {
@@ -2435,9 +2440,9 @@ static uint collect_unique_inputs(Node* n, Unique_Node_List& inputs) {
       }
       assert(cnt <= 1, "not unary");
     } else {
-      uint last_req = inp_cnt;
+      uint last_req = n->req();
       if (is_vector_ternary_bitwise_op(n)) {
-        last_req = inp_cnt - 1; // skip last input
+        last_req = n->req() - 1; // skip last input
       }
       for (uint i = 1; i < last_req; i++) {
         Node* def = n->in(i);
@@ -2447,6 +2452,7 @@ static uint collect_unique_inputs(Node* n, Unique_Node_List& inputs) {
         }
       }
     }
+    partition.push(n);
   } else { // not a bitwise operations
     if (!inputs.member(n)) {
       inputs.push(n);
@@ -2481,10 +2487,7 @@ Node* Compile::xform_to_MacroLogicV(PhaseIterGVN& igvn,
   Node* in3 = (inputs.size() == 3 ? inputs.at(2) : in2);
 
   uint func = compute_truth_table(partition, inputs);
-
-  Node* pn = partition.at(partition.size() - 1);
-  Node* mask = pn->is_predicated_vector() ? pn->in(pn->req()-1) : NULL;
-  return igvn.transform(MacroLogicVNode::make(igvn, in1, in2, in3, mask, func, vt));
+  return igvn.transform(MacroLogicVNode::make(igvn, in3, in2, in1, func, vt));
 }
 
 static uint extract_bit(uint func, uint pos) {
@@ -2564,11 +2567,11 @@ uint Compile::compute_truth_table(Unique_Node_List& partition, Unique_Node_List&
 
   // Populate precomputed functions for inputs.
   // Each input corresponds to one column of 3 input truth-table.
-  uint input_funcs[] = { 0xAA,   // (_, _, c) -> c
+  uint input_funcs[] = { 0xAA,   // (_, _, a) -> a
                          0xCC,   // (_, b, _) -> b
-                         0xF0 }; // (a, _, _) -> a
+                         0xF0 }; // (c, _, _) -> c
   for (uint i = 0; i < inputs.size(); i++) {
-    eval_map.put(inputs.at(i), input_funcs[2-i]);
+    eval_map.put(inputs.at(i), input_funcs[i]);
   }
 
   for (uint i = 0; i < partition.size(); i++) {
@@ -2611,14 +2614,6 @@ uint Compile::compute_truth_table(Unique_Node_List& partition, Unique_Node_List&
   return res;
 }
 
-// Criteria under which nodes gets packed into a macro logic node:-
-//  1) Parent and both child nodes are all unmasked or masked with
-//     same predicates.
-//  2) Masked parent can be packed with left child if it is predicated
-//     and both have same predicates.
-//  3) Masked parent can be packed with right child if its un-predicated
-//     or has matching predication condition.
-//  4) An unmasked parent can be packed with an unmasked child.
 bool Compile::compute_logic_cone(Node* n, Unique_Node_List& partition, Unique_Node_List& inputs) {
   assert(partition.size() == 0, "not empty");
   assert(inputs.size() == 0, "not empty");
@@ -2628,71 +2623,44 @@ bool Compile::compute_logic_cone(Node* n, Unique_Node_List& partition, Unique_No
 
   bool is_unary_op = is_vector_unary_bitwise_op(n);
   if (is_unary_op) {
-    assert(collect_unique_inputs(n, inputs) == 1, "not unary");
+    assert(collect_unique_inputs(n, partition, inputs) == 1, "not unary");
     return false; // too few inputs
   }
 
-  bool pack_left_child = true;
-  bool pack_right_child = true;
+  assert(is_vector_binary_bitwise_op(n), "not binary");
+  Node* in1 = n->in(1);
+  Node* in2 = n->in(2);
 
-  bool left_child_LOP = is_vector_bitwise_op(n->in(1));
-  bool right_child_LOP = is_vector_bitwise_op(n->in(2));
+  int in1_unique_inputs_cnt = collect_unique_inputs(in1, partition, inputs);
+  int in2_unique_inputs_cnt = collect_unique_inputs(in2, partition, inputs);
+  partition.push(n);
 
-  int left_child_input_cnt = 0;
-  int right_child_input_cnt = 0;
-
-  bool parent_is_predicated = n->is_predicated_vector();
-  bool left_child_predicated = n->in(1)->is_predicated_vector();
-  bool right_child_predicated = n->in(2)->is_predicated_vector();
-
-  Node* parent_pred = parent_is_predicated ? n->in(n->req()-1) : NULL;
-  Node* left_child_pred = left_child_predicated ? n->in(1)->in(n->in(1)->req()-1) : NULL;
-  Node* right_child_pred = right_child_predicated ? n->in(1)->in(n->in(1)->req()-1) : NULL;
-
-  do {
-    if (pack_left_child && left_child_LOP &&
-        ((!parent_is_predicated && !left_child_predicated) ||
-        ((parent_is_predicated && left_child_predicated &&
-          parent_pred == left_child_pred)))) {
-       partition.push(n->in(1));
-       left_child_input_cnt = collect_unique_inputs(n->in(1), inputs);
-    } else {
-       inputs.push(n->in(1));
-       left_child_input_cnt = 1;
+  // Too many inputs?
+  if (inputs.size() > 3) {
+    partition.clear();
+    inputs.clear();
+    { // Recompute in2 inputs
+      Unique_Node_List not_used;
+      in2_unique_inputs_cnt = collect_unique_inputs(in2, not_used, not_used);
     }
-
-    if (pack_right_child && right_child_LOP &&
-        (!right_child_predicated ||
-         (right_child_predicated && parent_is_predicated &&
-          parent_pred == right_child_pred))) {
-       partition.push(n->in(2));
-       right_child_input_cnt = collect_unique_inputs(n->in(2), inputs);
-    } else {
-       inputs.push(n->in(2));
-       right_child_input_cnt = 1;
+    // Pick the node with minimum number of inputs.
+    if (in1_unique_inputs_cnt >= 3 && in2_unique_inputs_cnt >= 3) {
+      return false; // still too many inputs
     }
+    // Recompute partition & inputs.
+    Node* child       = (in1_unique_inputs_cnt < in2_unique_inputs_cnt ? in1 : in2);
+    collect_unique_inputs(child, partition, inputs);
 
-    if (inputs.size() > 3) {
-      assert(partition.size() > 0, "");
-      inputs.clear();
-      partition.clear();
-      if (left_child_input_cnt > right_child_input_cnt) {
-        pack_left_child = false;
-      } else {
-        pack_right_child = false;
-      }
-    } else {
-      break;
-    }
-  } while(true);
+    Node* other_input = (in1_unique_inputs_cnt < in2_unique_inputs_cnt ? in2 : in1);
+    inputs.push(other_input);
 
-  if(partition.size()) {
     partition.push(n);
   }
 
   return (partition.size() == 2 || partition.size() == 3) &&
          (inputs.size()    == 2 || inputs.size()    == 3);
 }
+
 
 void Compile::process_logic_cone_root(PhaseIterGVN &igvn, Node *n, VectorSet &visited) {
   assert(is_vector_bitwise_op(n), "not a root");
@@ -2713,19 +2681,8 @@ void Compile::process_logic_cone_root(PhaseIterGVN &igvn, Node *n, VectorSet &vi
   Unique_Node_List inputs;
   if (compute_logic_cone(n, partition, inputs)) {
     const TypeVect* vt = n->bottom_type()->is_vect();
-    Node* pn = partition.at(partition.size() - 1);
-    Node* mask = pn->is_predicated_vector() ? pn->in(pn->req()-1) : NULL;
-    if (mask == NULL ||
-        Matcher::match_rule_supported_vector_masked(Op_MacroLogicV, vt->length(), vt->element_basic_type())) {
-      Node* macro_logic = xform_to_MacroLogicV(igvn, vt, partition, inputs);
-#ifdef ASSERT
-      if (TraceNewVectors) {
-        tty->print("new Vector node: ");
-        macro_logic->dump();
-      }
-#endif
-      igvn.replace_node(n, macro_logic);
-    }
+    Node* macro_logic = xform_to_MacroLogicV(igvn, vt, partition, inputs);
+    igvn.replace_node(n, macro_logic);
   }
 }
 
@@ -2852,7 +2809,7 @@ void Compile::Code_Gen() {
     output.install();
   }
 
-  print_method(PHASE_FINAL_CODE, 1);
+  print_method(PHASE_FINAL_CODE);
 
   // He's dead, Jim.
   _cfg     = (PhaseCFG*)((intptr_t)0xdeadbeef);
@@ -3533,7 +3490,7 @@ void Compile::final_graph_reshaping_main_switch(Node* n, Final_Reshape_Counts& f
     }
     break;
   case Op_Loop:
-    assert(!n->as_Loop()->is_loop_nest_inner_loop() || _loop_opts_cnt == 0, "should have been turned into a counted loop");
+    assert(!n->as_Loop()->is_transformed_long_inner_loop() || _loop_opts_cnt == 0, "should have been turned into a counted loop");
   case Op_CountedLoop:
   case Op_LongCountedLoop:
   case Op_OuterStripMinedLoop:
@@ -3812,7 +3769,7 @@ bool Compile::final_graph_reshaping() {
       // 'fall-thru' path, so expected kids is 1 less.
       if (n->is_PCTable() && n->in(0) && n->in(0)->in(0)) {
         if (n->in(0)->in(0)->is_Call()) {
-          CallNode* call = n->in(0)->in(0)->as_Call();
+          CallNode *call = n->in(0)->in(0)->as_Call();
           if (call->entry_point() == OptoRuntime::rethrow_stub()) {
             required_outcnt--;      // Rethrow always has 1 less kid
           } else if (call->req() > TypeFunc::Parms &&
@@ -3821,25 +3778,22 @@ bool Compile::final_graph_reshaping() {
             // detected that the virtual call will always result in a null
             // pointer exception. The fall-through projection of this CatchNode
             // will not be populated.
-            Node* arg0 = call->in(TypeFunc::Parms);
+            Node *arg0 = call->in(TypeFunc::Parms);
             if (arg0->is_Type() &&
                 arg0->as_Type()->type()->higher_equal(TypePtr::NULL_PTR)) {
               required_outcnt--;
             }
-          } else if (call->entry_point() == OptoRuntime::new_array_Java() ||
-                     call->entry_point() == OptoRuntime::new_array_nozero_Java()) {
-            // Check for illegal array length. In such case, the optimizer has
+          } else if (call->entry_point() == OptoRuntime::new_array_Java() &&
+                     call->req() > TypeFunc::Parms+1 &&
+                     call->is_CallStaticJava()) {
+            // Check for negative array length. In such case, the optimizer has
             // detected that the allocation attempt will always result in an
             // exception. There is no fall-through projection of this CatchNode .
-            assert(call->is_CallStaticJava(), "static call expected");
-            assert(call->req() == call->jvms()->endoff() + 1, "missing extra input");
-            Node* valid_length_test = call->in(call->req()-1);
-            call->del_req(call->req()-1);
-            if (valid_length_test->find_int_con(1) == 0) {
+            Node *arg1 = call->in(TypeFunc::Parms+1);
+            if (arg1->is_Type() &&
+                arg1->as_Type()->type()->join(TypeInt::POS)->empty()) {
               required_outcnt--;
             }
-            assert(n->outcnt() == required_outcnt, "malformed control flow");
-            continue;
           }
         }
       }
@@ -3847,14 +3801,6 @@ bool Compile::final_graph_reshaping() {
       if (n->outcnt() != required_outcnt) {
         record_method_not_compilable("malformed control flow");
         return true;            // Not all targets reachable!
-      }
-    } else if (n->is_PCTable() && n->in(0) && n->in(0)->in(0) && n->in(0)->in(0)->is_Call()) {
-      CallNode* call = n->in(0)->in(0)->as_Call();
-      if (call->entry_point() == OptoRuntime::new_array_Java() ||
-          call->entry_point() == OptoRuntime::new_array_nozero_Java()) {
-        assert(call->is_CallStaticJava(), "static call expected");
-        assert(call->req() == call->jvms()->endoff() + 1, "missing extra input");
-        call->del_req(call->req()-1); // valid length test useless now
       }
     }
     // Check that I actually visited all kids.  Unreached kids
@@ -4095,7 +4041,7 @@ void Compile::record_failure(const char* reason) {
   }
 
   if (!C->failure_reason_is(C2Compiler::retry_no_subsuming_loads())) {
-    C->print_method(PHASE_FAILURE, 1);
+    C->print_method(PHASE_FAILURE);
   }
   _root = NULL;  // flush the graph, too
 }
@@ -4149,45 +4095,34 @@ Compile::TracePhase::~TracePhase() {
 // (1) subklass is already limited to a subtype of superklass => always ok
 // (2) subklass does not overlap with superklass => always fail
 // (3) superklass has NO subtypes and we can check with a simple compare.
-int Compile::static_subtype_check(ciKlass* superk, ciKlass* subk) {
+Compile::SubTypeCheckResult Compile::static_subtype_check(const TypeKlassPtr* superk, const TypeKlassPtr* subk) {
   if (StressReflectiveCode) {
     return SSC_full_test;       // Let caller generate the general case.
   }
 
-  if (superk == env()->Object_klass()) {
-    return SSC_always_true;     // (0) this test cannot fail
+  if (subk->is_java_subtype_of(superk)) {
+    return SSC_always_true; // (0) and (1)  this test cannot fail
   }
 
-  ciType* superelem = superk;
-  ciType* subelem = subk;
-  if (superelem->is_array_klass()) {
-    superelem = superelem->as_array_klass()->base_element_type();
-  }
-  if (subelem->is_array_klass()) {
-    subelem = subelem->as_array_klass()->base_element_type();
+  if (!subk->maybe_java_subtype_of(superk)) {
+    return SSC_always_false; // (2) true path dead; no dynamic test needed
   }
 
-  if (!subk->is_interface()) {  // cannot trust static interface types yet
-    if (subk->is_subtype_of(superk)) {
-      return SSC_always_true;   // (1) false path dead; no dynamic test needed
-    }
-    if (!(superelem->is_klass() && superelem->as_klass()->is_interface()) &&
-        !(subelem->is_klass() && subelem->as_klass()->is_interface()) &&
-        !superk->is_subtype_of(subk)) {
-      return SSC_always_false;  // (2) true path dead; no dynamic test needed
-    }
+  const Type* superelem = superk;
+  if (superk->isa_aryklassptr()) {
+    int ignored;
+    superelem = superk->is_aryklassptr()->base_element_type(ignored);
   }
 
-  // If casting to an instance klass, it must have no subtypes
-  if (superk->is_interface()) {
-    // Cannot trust interfaces yet.
-    // %%% S.B. superk->nof_implementors() == 1
-  } else if (superelem->is_instance_klass()) {
-    ciInstanceKlass* ik = superelem->as_instance_klass();
-    if (!ik->has_subklass() && !ik->is_interface()) {
+  if (superelem->isa_instklassptr()) {
+    ciInstanceKlass* ik = superelem->is_instklassptr()->instance_klass();
+    if (!ik->has_subklass()) {
       if (!ik->is_final()) {
         // Add a dependency if there is a chance of a later subclass.
         dependencies()->assert_leaf_type(ik);
+      }
+      if (!superk->maybe_java_subtype_of(subk)) {
+        return SSC_always_false;
       }
       return SSC_easy_test;     // (3) caller can do a simple ptr comparison
     }
@@ -4825,79 +4760,56 @@ void Compile::sort_macro_nodes() {
   }
 }
 
-void Compile::print_method(CompilerPhaseType cpt, int level, Node* n) {
+void Compile::print_method(CompilerPhaseType cpt, const char *name, int level) {
   EventCompilerPhase event;
   if (event.should_commit()) {
     CompilerEvent::PhaseEvent::post(event, C->_latest_stage_start_counter, cpt, C->_compile_id, level);
   }
 #ifndef PRODUCT
+  if (should_print(level)) {
+    _printer->print_method(name, level);
+  }
+#endif
+  C->_latest_stage_start_counter.stamp();
+}
+
+void Compile::print_method(CompilerPhaseType cpt, int level, int idx) {
+  char output[1024];
+#ifndef PRODUCT
+  if (idx != 0) {
+    jio_snprintf(output, sizeof(output), "%s:%d", CompilerPhaseTypeHelper::to_string(cpt), idx);
+  } else {
+    jio_snprintf(output, sizeof(output), "%s", CompilerPhaseTypeHelper::to_string(cpt));
+  }
+#endif
+  print_method(cpt, output, level);
+}
+
+void Compile::print_method(CompilerPhaseType cpt, Node* n, int level) {
   ResourceMark rm;
   stringStream ss;
-  ss.print_raw(CompilerPhaseTypeHelper::to_name(cpt));
-  if (n != nullptr) {
+  ss.print_raw(CompilerPhaseTypeHelper::to_string(cpt));
+  if (n != NULL) {
     ss.print(": %d %s ", n->_idx, NodeClassNames[n->Opcode()]);
+  } else {
+    ss.print_raw(": NULL");
   }
-
-  const char* name = ss.as_string();
-  if (should_print_igv(level)) {
-    _igv_printer->print_method(name, level);
-  }
-  if (should_print_phase(cpt)) {
-    print_ideal_ir(CompilerPhaseTypeHelper::to_name(cpt));
-  }
-#endif
-  C->_latest_stage_start_counter.stamp();
+  C->print_method(cpt, ss.as_string(), level);
 }
 
-// Only used from CompileWrapper
-void Compile::begin_method() {
-#ifndef PRODUCT
-  if (_method != NULL && should_print_igv(1)) {
-    _igv_printer->begin_method();
-  }
-#endif
-  C->_latest_stage_start_counter.stamp();
-}
-
-// Only used from CompileWrapper
-void Compile::end_method() {
+void Compile::end_method(int level) {
   EventCompilerPhase event;
   if (event.should_commit()) {
-    CompilerEvent::PhaseEvent::post(event, C->_latest_stage_start_counter, PHASE_END, C->_compile_id, 1);
+    CompilerEvent::PhaseEvent::post(event, C->_latest_stage_start_counter, PHASE_END, C->_compile_id, level);
   }
 
 #ifndef PRODUCT
-  if (_method != NULL && should_print_igv(1)) {
-    _igv_printer->end_method();
+  if (_method != NULL && should_print(level)) {
+    _printer->end_method();
   }
 #endif
 }
 
-bool Compile::should_print_phase(CompilerPhaseType cpt) {
-#ifndef PRODUCT
-  if ((_directive->ideal_phase_mask() & CompilerPhaseTypeHelper::to_bitmask(cpt)) != 0) {
-    return true;
-  }
-#endif
-  return false;
-}
-
-bool Compile::should_print_igv(int level) {
-#ifndef PRODUCT
-  if (PrintIdealGraphLevel < 0) { // disabled by the user
-    return false;
-  }
-
-  bool need = directive()->IGVPrintLevelOption >= level;
-  if (need && !_igv_printer) {
-    _igv_printer = IdealGraphPrinter::printer();
-    _igv_printer->set_compile(this);
-  }
-  return need;
-#else
-  return false;
-#endif
-}
 
 #ifndef PRODUCT
 IdealGraphPrinter* Compile::_debug_file_printer = NULL;
