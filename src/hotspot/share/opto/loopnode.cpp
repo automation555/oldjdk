@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -1984,7 +1984,6 @@ bool PhaseIdealLoop::is_counted_loop(Node* x, IdealLoopTree*&loop, BasicType iv_
 
   Node* entry_control = init_control;
   bool strip_mine_loop = iv_bt == T_INT &&
-                         LoopStripMiningIter > 1 &&
                          loop->_child == NULL &&
                          sfpt2->Opcode() == Op_SafePoint &&
                          !loop->_has_call;
@@ -2012,7 +2011,7 @@ bool PhaseIdealLoop::is_counted_loop(Node* x, IdealLoopTree*&loop, BasicType iv_
 
   if (iv_bt == T_INT && (LoopStripMiningIter == 0 || strip_mine_loop)) {
     // Check for immediately preceding SafePoint and remove
-    if (sfpt2->Opcode() == Op_SafePoint && (LoopStripMiningIter != 0 || is_deleteable_safept(sfpt2))) {
+    if (sfpt2->Opcode() == Op_SafePoint && (strip_mine_loop || is_deleteable_safept(sfpt2))) {
       if (strip_mine_loop) {
         Node* outer_le = outer_ilt->_tail->in(0);
         Node* sfpt = sfpt2->clone();
@@ -2561,6 +2560,29 @@ void OuterStripMinedLoopNode::adjust_strip_mined_loop(PhaseIterGVN* igvn) {
   // construct required phi nodes for outer loop.
   CountedLoopNode* inner_cl = unique_ctrl_out()->as_CountedLoop();
   assert(inner_cl->is_strip_mined(), "inner loop should be strip mined");
+  if (LoopStripMiningIter == 0) {
+    remove_outer_loop_and_safepoint(igvn);
+    return;
+  }
+  if (LoopStripMiningIter == 1) {
+    CountedLoopEndNode* cle = inner_cl->loopexit();
+    Node* inner_test = cle->in(1);
+    IfNode* outer_le = outer_loop_end();
+    Node* outer_test = outer_le->in(1);
+
+    // make counted loop exit test always fail to
+    igvn->replace_input_of(cle, 1, outer_test);
+    // replace outer loop end with CountedLoopEndNode with formers' CLE's exit test
+    Node* new_end = igvn->transform(new CountedLoopEndNode(outer_le->in(0), inner_test, cle->_prob, cle->_fcnt));
+    igvn->replace_node(outer_le, new_end);
+    // the outer loop backedge becomes the backedge of the inner loop
+    igvn->replace_input_of(inner_cl, LoopBackControl, in(LoopBackControl));
+    // make the outer loop go away
+    igvn->replace_input_of(this, LoopBackControl, igvn->C->top());
+    igvn->C->print_method(PHASE_DEBUG, 2);
+    inner_cl->clear_strip_mined();
+    return;
+  }
   Node* inner_iv_phi = inner_cl->phi();
   if (inner_iv_phi == NULL) {
     IfNode* outer_le = outer_loop_end();
@@ -2580,11 +2602,7 @@ void OuterStripMinedLoopNode::adjust_strip_mined_loop(PhaseIterGVN* igvn) {
   assert(iter_estimate > 0, "broken");
   if ((jlong)scaled_iters != scaled_iters_long || iter_estimate <= short_scaled_iters) {
     // Remove outer loop and safepoint (too few iterations)
-    Node* outer_sfpt = outer_safepoint();
-    Node* outer_out = outer_loop_exit();
-    igvn->replace_node(outer_out, outer_sfpt->in(0));
-    igvn->replace_input_of(outer_sfpt, 0, igvn->C->top());
-    inner_cl->clear_strip_mined();
+    remove_outer_loop_and_safepoint(igvn);
     return;
   }
   if (iter_estimate <= scaled_iters_long) {
@@ -2828,6 +2846,15 @@ void OuterStripMinedLoopNode::adjust_strip_mined_loop(PhaseIterGVN* igvn) {
   }
 }
 
+void OuterStripMinedLoopNode::remove_outer_loop_and_safepoint(PhaseIterGVN* igvn) const {
+  CountedLoopNode* inner_cl = unique_ctrl_out()->as_CountedLoop();
+  Node* outer_sfpt = outer_safepoint();
+  Node* outer_out = outer_loop_exit();
+  igvn->replace_node(outer_out, outer_sfpt->in(0));
+  igvn->replace_input_of(outer_sfpt, 0, igvn->C->top());
+  inner_cl->clear_strip_mined();
+}
+
 const Type* OuterStripMinedLoopEndNode::Value(PhaseGVN* phase) const {
   if (!in(0)) return Type::TOP;
   if (phase->type(in(0)) == Type::TOP)
@@ -2846,7 +2873,7 @@ bool OuterStripMinedLoopEndNode::is_expanded(PhaseGVN *phase) const {
   if (phase->is_IterGVN()) {
     Node* backedge = proj_out_or_null(true);
     if (backedge != NULL) {
-      Node* head = backedge->unique_ctrl_out_or_null();
+      Node* head = backedge->unique_ctrl_out();
       if (head != NULL && head->is_OuterStripMinedLoop()) {
         if (head->find_out_with(Op_Phi) != NULL) {
           return true;
@@ -3663,7 +3690,7 @@ void IdealLoopTree::counted_loop( PhaseIdealLoop *phase ) {
   if (_head->is_CountedLoop() ||
       phase->is_counted_loop(_head, loop, T_INT)) {
 
-    if (LoopStripMiningIter == 0 || (LoopStripMiningIter > 1 && _child == NULL)) {
+    if (LoopStripMiningIter == 0 || _head->as_CountedLoop()->is_strip_mined()) {
       // Indicate we do not need a safepoint here
       _has_sfpt = 1;
     }
@@ -5725,45 +5752,38 @@ void PhaseIdealLoop::build_loop_late_post_work(Node *n, bool pinned) {
   }
   assert(early == legal || legal != C->root(), "bad dominance of inputs");
 
-  if (least != early) {
-    // Move the node above predicates as far up as possible so a
-    // following pass of loop predication doesn't hoist a predicate
-    // that depends on it above that node.
-    Node* new_ctrl = least;
-    for (;;) {
-      if (!new_ctrl->is_Proj()) {
-        break;
-      }
-      CallStaticJavaNode* call = new_ctrl->as_Proj()->is_uncommon_trap_if_pattern(Deoptimization::Reason_none);
-      if (call == NULL) {
-        break;
-      }
-      int req = call->uncommon_trap_request();
-      Deoptimization::DeoptReason trap_reason = Deoptimization::trap_request_reason(req);
-      if (trap_reason != Deoptimization::Reason_loop_limit_check &&
-          trap_reason != Deoptimization::Reason_predicate &&
-          trap_reason != Deoptimization::Reason_profile_predicate) {
-        break;
-      }
-      Node* c = new_ctrl->in(0)->in(0);
-      if (is_dominator(c, early) && c != early) {
-        break;
-      }
-      new_ctrl = c;
-    }
-    least = new_ctrl;
-  }
   // Try not to place code on a loop entry projection
   // which can inhibit range check elimination.
   if (least != early) {
-    Node* ctrl_out = least->unique_ctrl_out_or_null();
-    if (ctrl_out != NULL && ctrl_out->is_Loop() &&
-        least == ctrl_out->in(LoopNode::EntryControl) &&
-        (ctrl_out->is_CountedLoop() || ctrl_out->is_OuterStripMinedLoop())) {
-      Node* least_dom = idom(least);
-      if (get_loop(least_dom)->is_member(get_loop(least))) {
-        least = least_dom;
+    Node* ctrl_out = least->unique_ctrl_out();
+    if (ctrl_out && ctrl_out->is_Loop() &&
+        least == ctrl_out->in(LoopNode::EntryControl)) {
+      // Move the node above predicates as far up as possible so a
+      // following pass of loop predication doesn't hoist a predicate
+      // that depends on it above that node.
+      Node* new_ctrl = least;
+      for (;;) {
+        if (!new_ctrl->is_Proj()) {
+          break;
+        }
+        CallStaticJavaNode* call = new_ctrl->as_Proj()->is_uncommon_trap_if_pattern(Deoptimization::Reason_none);
+        if (call == NULL) {
+          break;
+        }
+        int req = call->uncommon_trap_request();
+        Deoptimization::DeoptReason trap_reason = Deoptimization::trap_request_reason(req);
+        if (trap_reason != Deoptimization::Reason_loop_limit_check &&
+            trap_reason != Deoptimization::Reason_predicate &&
+            trap_reason != Deoptimization::Reason_profile_predicate) {
+          break;
+        }
+        Node* c = new_ctrl->in(0)->in(0);
+        if (is_dominator(c, early) && c != early) {
+          break;
+        }
+        new_ctrl = c;
       }
+      least = new_ctrl;
     }
   }
 
