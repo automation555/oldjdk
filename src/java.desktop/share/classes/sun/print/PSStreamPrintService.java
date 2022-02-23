@@ -421,23 +421,13 @@ public class PSStreamPrintService extends StreamPrintService
         else if (attr.getCategory() == Copies.class) {
             return isSupportedCopies((Copies)attr);
         } else if (attr.getCategory() == Media.class &&
-                   attr instanceof MediaSizeName) {
-            return isSupportedMedia((MediaSizeName)attr);
+                   attr instanceof MediaSizeName msn) {
+            return isSupportedMedia(msn);
         } else if (attr.getCategory() == OrientationRequested.class) {
             if (attr == OrientationRequested.REVERSE_PORTRAIT ||
                 (flavor != null) &&
                 !(flavor.equals(DocFlavor.SERVICE_FORMATTED.PAGEABLE) ||
-                  flavor.equals(DocFlavor.SERVICE_FORMATTED.PRINTABLE) ||
-                  flavor.equals(DocFlavor.INPUT_STREAM.GIF) ||
-                  flavor.equals(DocFlavor.INPUT_STREAM.JPEG) ||
-                  flavor.equals(DocFlavor.INPUT_STREAM.PNG) ||
-                  flavor.equals(DocFlavor.BYTE_ARRAY.GIF) ||
-                  flavor.equals(DocFlavor.BYTE_ARRAY.JPEG) ||
-                  flavor.equals(DocFlavor.BYTE_ARRAY.PNG) ||
-                  flavor.equals(DocFlavor.URL.GIF) ||
-                  flavor.equals(DocFlavor.URL.JPEG) ||
-                  flavor.equals(DocFlavor.URL.PNG)))
-            {
+                flavor.equals(DocFlavor.SERVICE_FORMATTED.PRINTABLE))) {
                 return false;
             }
         } else if (attr.getCategory() == PageRanges.class) {
@@ -450,7 +440,7 @@ public class PSStreamPrintService extends StreamPrintService
             if (flavor != null &&
                 !(flavor.equals(DocFlavor.SERVICE_FORMATTED.PAGEABLE) ||
                 flavor.equals(DocFlavor.SERVICE_FORMATTED.PRINTABLE))) {
-                return attr == SheetCollate.UNCOLLATED;
+                return false;
             }
         } else if (attr.getCategory() == Sides.class) {
             if (flavor != null &&
@@ -509,8 +499,8 @@ public class PSStreamPrintService extends StreamPrintService
      */
     public boolean equals(Object obj) {
         return (obj == this ||
-                 (obj instanceof PSStreamPrintService &&
-                 ((PSStreamPrintService)obj).getName().equals(getName())));
+                 (obj instanceof PSStreamPrintService service &&
+                 service.getName().equals(getName())));
     }
 
    public int hashCode() {

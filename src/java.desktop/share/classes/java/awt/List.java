@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1995, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -1113,14 +1113,13 @@ public class List extends Component implements ItemSelectable, Accessible {
      * @since        1.1
      */
     protected void processEvent(AWTEvent e) {
-        if (e instanceof ItemEvent) {
-            processItemEvent((ItemEvent)e);
-            return;
-        } else if (e instanceof ActionEvent) {
-            processActionEvent((ActionEvent)e);
-            return;
+        if (e instanceof ItemEvent itemEvent) {
+            processItemEvent(itemEvent);
+        } else if (e instanceof ActionEvent actionEvent) {
+            processActionEvent(actionEvent);
+        } else {
+            super.processEvent(e);
         }
-        super.processEvent(e);
     }
 
     /**
@@ -1750,7 +1749,7 @@ public class List extends Component implements ItemSelectable, Accessible {
             /**
              * Get the Font of this object.
              *
-             * @return the Font, if supported, for the object; otherwise, null
+             * @return the Font,if supported, for the object; otherwise, null
              * @see #setFont
              */
             public Font getFont() {

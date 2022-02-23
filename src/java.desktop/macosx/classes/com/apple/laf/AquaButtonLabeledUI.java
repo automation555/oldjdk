@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -114,11 +114,9 @@ public abstract class AquaButtonLabeledUI extends AquaButtonToggleUI implements 
         }
 
         // only do this if borders are on!
-        if (((AbstractButton)c).isBorderPainted() && !isCellEditor) {
-            final Border border = c.getBorder();
-            if (border instanceof AquaButtonBorder) {
-                ((AquaButtonBorder)border).paintButton(c, g, viewRect.x, viewRect.y, viewRect.width, viewRect.height);
-            }
+        if (((AbstractButton) c).isBorderPainted() && !isCellEditor &&
+                c.getBorder() instanceof AquaButtonBorder aquaButtonBorder) {
+            aquaButtonBorder.paintButton(c, g, viewRect.x, viewRect.y, viewRect.width, viewRect.height);
         }
 
         viewRect.x = i.left;
@@ -170,7 +168,7 @@ public abstract class AquaButtonLabeledUI extends AquaButtonToggleUI implements 
             }
 
             int offset = 0;
-            if (b.isFocusOwner() && b.isFocusPainted()) {
+            if (b.isFocusOwner()) {
                 offset = 2;
                 altIcon = AquaFocus.createFocusedIcon(altIcon, c, 2);
             }
