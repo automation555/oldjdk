@@ -68,6 +68,7 @@ import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
@@ -469,7 +470,7 @@ public class Resolve {
             return true;
         else {
             Symbol s2 = ((MethodSymbol)sym).implementation(site.tsym, types, true);
-            return (s2 == null || s2 == sym || sym.owner == s2.owner || (sym.owner.isInterface() && s2.owner == syms.objectType.tsym) ||
+            return (s2 == null || s2 == sym || sym.owner == s2.owner ||
                     !types.isSubSignature(types.memberType(site, s2), types.memberType(site, sym)));
         }
     }
@@ -1301,7 +1302,7 @@ public class Resolve {
 
                 @Override
                 void skip(JCTree tree) {
-                    result = false;
+                    result &= false;
                 }
 
                 @Override
@@ -1313,9 +1314,9 @@ public class Resolve {
                 @Override
                 public void visitReference(JCMemberReference tree) {
                     if (sRet.hasTag(VOID)) {
-                        // do nothing
+                        result &= true;
                     } else if (tRet.hasTag(VOID)) {
-                        result = false;
+                        result &= false;
                     } else if (tRet.isPrimitive() != sRet.isPrimitive()) {
                         boolean retValIsPrimitive =
                                 tree.refPolyKind == PolyKind.STANDALONE &&
@@ -1335,9 +1336,9 @@ public class Resolve {
                 @Override
                 public void visitLambda(JCLambda tree) {
                     if (sRet.hasTag(VOID)) {
-                        // do nothing
+                        result &= true;
                     } else if (tRet.hasTag(VOID)) {
-                        result = false;
+                        result &= false;
                     } else {
                         List<JCExpression> lambdaResults = lambdaResults(tree);
                         if (!lambdaResults.isEmpty() && unrelatedFunctionalInterfaces(tRet, sRet)) {
@@ -1854,8 +1855,7 @@ public class Resolve {
         List<Type>[] itypes = (List<Type>[])new List[] { List.<Type>nil(), List.<Type>nil() };
 
         InterfaceLookupPhase iphase = InterfaceLookupPhase.ABSTRACT_OK;
-        boolean isInterface = site.tsym.isInterface();
-        for (TypeSymbol s : isInterface ? List.of(intype.tsym) : superclasses(intype)) {
+        for (TypeSymbol s : superclasses(intype)) {
             bestSoFar = findMethodInScope(env, site, name, argtypes, typeargtypes,
                     s.members(), bestSoFar, allowBoxing, useVarargs, true);
             if (name == names.init) return bestSoFar;
@@ -1891,19 +1891,6 @@ public class Resolve {
                     //to explicitly call that out (see CR 6178365)
                     bestSoFar = concrete;
                 }
-            }
-        }
-        if (isInterface && bestSoFar.kind.isResolutionError()) {
-            bestSoFar = findMethodInScope(env, site, name, argtypes, typeargtypes,
-                    syms.objectType.tsym.members(), bestSoFar, allowBoxing, useVarargs, true);
-            if (bestSoFar.kind.isValid()) {
-                Symbol baseSymbol = bestSoFar;
-                bestSoFar = new MethodSymbol(bestSoFar.flags_field, bestSoFar.name, bestSoFar.type, intype.tsym) {
-                    @Override
-                    public Symbol baseSymbol() {
-                        return baseSymbol;
-                    }
-                };
             }
         }
         return bestSoFar;
@@ -2942,6 +2929,9 @@ public class Resolve {
                                 sym.kind != WRONG_MTHS) {
                                 sym = super.access(env, pos, location, sym);
                             } else {
+                                final JCDiagnostic details = sym.kind == WRONG_MTH ?
+                                                ((InapplicableSymbolError)sym.baseSymbol()).errCandidate().snd :
+                                                null;
                                 sym = new DiamondError(sym, currentResolutionContext);
                                 sym = accessMethod(sym, pos, site, names.init, true, argtypes, typeargtypes);
                                 env.info.pendingResolutionPhase = currentResolutionContext.step;
@@ -3905,17 +3895,6 @@ public class Resolve {
         }
     }
 
-    /** check if a type is a subtype of Serializable, if that is available.*/
-    boolean isSerializable(Type t) {
-        try {
-            syms.serializableType.complete();
-        }
-        catch (CompletionFailure e) {
-            return false;
-        }
-        return types.isSubtype(t, syms.serializableType);
-    }
-
     /**
      * Root class for resolution errors. Subclass of ResolveError
      * represent a different kinds of resolution error - as such they must
@@ -4157,8 +4136,7 @@ public class Resolve {
 
             Pair<Symbol, JCDiagnostic> c = errCandidate();
             if (compactMethodDiags) {
-                JCDiagnostic simpleDiag =
-                    MethodResolutionDiagHelper.rewrite(diags, pos, log.currentSource(), dkind, c.snd);
+                JCDiagnostic simpleDiag = MethodResolutionDiagHelper.rewrite(diags, pos, log.currentSource(), dkind, c.snd);
                 if (simpleDiag != null) {
                     return simpleDiag;
                 }
@@ -4221,13 +4199,10 @@ public class Resolve {
             if (filteredCandidates.isEmpty()) {
                 filteredCandidates = candidatesMap;
             }
-            boolean truncatedDiag = candidatesMap.size() != filteredCandidates.size();
             if (filteredCandidates.size() > 1) {
                 JCDiagnostic err = diags.create(dkind,
                         null,
-                        truncatedDiag ?
-                            EnumSet.of(DiagnosticFlag.COMPRESSED) :
-                            EnumSet.noneOf(DiagnosticFlag.class),
+                        EnumSet.noneOf(DiagnosticFlag.class),
                         log.currentSource(),
                         pos,
                         "cant.apply.symbols",
@@ -4246,9 +4221,6 @@ public class Resolve {
                     }
                 }.getDiagnostic(dkind, pos,
                     location, site, name, argtypes, typeargtypes);
-                if (truncatedDiag) {
-                    d.setFlag(DiagnosticFlag.COMPRESSED);
-                }
                 return d;
             } else {
                 return new SymbolNotFoundError(ABSENT_MTH).getDiagnostic(dkind, pos,
@@ -4809,12 +4781,12 @@ public class Resolve {
                     DiagnosticPosition preferredPos, DiagnosticSource preferredSource,
                     DiagnosticType preferredKind, JCDiagnostic d) {
                 JCDiagnostic cause = (JCDiagnostic)d.getArgs()[causeIndex];
-                DiagnosticPosition pos = d.getDiagnosticPosition();
-                if (pos == null) {
-                    pos = preferredPos;
-                }
-                return diags.create(preferredKind, preferredSource, pos,
-                        "prob.found.req", cause);
+                final DiagnosticPosition pos = d.getDiagnosticPosition();
+                UnaryOperator<JCDiagnostic> rewriter = pos != null ?
+                        diag -> diags.create(preferredKind, preferredSource, pos, "prob.found.req", cause) :
+                        null;
+                return diags.create(preferredKind, preferredSource, preferredPos,
+                        "prob.found.req", rewriter, cause);
             }
         }
 
@@ -4876,7 +4848,6 @@ public class Resolve {
                 if (_entry.getKey().matches(d)) {
                     JCDiagnostic simpleDiag =
                             _entry.getValue().rewriteDiagnostic(diags, pos, source, dkind, d);
-                    simpleDiag.setFlag(DiagnosticFlag.COMPRESSED);
                     return simpleDiag;
                 }
             }
