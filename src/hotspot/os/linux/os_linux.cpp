@@ -249,9 +249,6 @@ bool os::Linux::get_tick_information(CPUPerfTicks* pticks, int which_logical_cpu
   uint64_t      iowTicks = 0, irqTicks = 0, sirqTicks= 0;
   // steal (since kernel 2.6.11): time spent in other OS when running in a virtualized environment
   uint64_t      stealTicks = 0;
-  // guest (since kernel 2.6.24): time spent running a virtual CPU for guest OS under the
-  // control of the Linux kernel
-  uint64_t      guestNiceTicks = 0;
   int           logical_cpu = -1;
   const int     required_tickinfo_count = (which_logical_cpu == -1) ? 4 : 5;
   int           n;
@@ -265,10 +262,10 @@ bool os::Linux::get_tick_information(CPUPerfTicks* pticks, int which_logical_cpu
   if (which_logical_cpu == -1) {
     n = fscanf(fh, "cpu " UINT64_FORMAT " " UINT64_FORMAT " " UINT64_FORMAT " "
             UINT64_FORMAT " " UINT64_FORMAT " " UINT64_FORMAT " " UINT64_FORMAT " "
-            UINT64_FORMAT " " UINT64_FORMAT " ",
+            UINT64_FORMAT " ",
             &userTicks, &niceTicks, &systemTicks, &idleTicks,
             &iowTicks, &irqTicks, &sirqTicks,
-            &stealTicks, &guestNiceTicks);
+            &stealTicks);
   } else {
     // Move to next line
     next_line(fh);
@@ -280,10 +277,10 @@ bool os::Linux::get_tick_information(CPUPerfTicks* pticks, int which_logical_cpu
 
     n = fscanf(fh, "cpu%u " UINT64_FORMAT " " UINT64_FORMAT " " UINT64_FORMAT " "
                UINT64_FORMAT " " UINT64_FORMAT " " UINT64_FORMAT " " UINT64_FORMAT " "
-               UINT64_FORMAT " " UINT64_FORMAT " ",
+               UINT64_FORMAT " ",
                &logical_cpu, &userTicks, &niceTicks,
                &systemTicks, &idleTicks, &iowTicks, &irqTicks, &sirqTicks,
-               &stealTicks, &guestNiceTicks);
+               &stealTicks);
   }
 
   fclose(fh);
@@ -293,7 +290,7 @@ bool os::Linux::get_tick_information(CPUPerfTicks* pticks, int which_logical_cpu
   pticks->used       = userTicks + niceTicks;
   pticks->usedKernel = systemTicks + irqTicks + sirqTicks;
   pticks->total      = userTicks + niceTicks + systemTicks + idleTicks +
-                       iowTicks + irqTicks + sirqTicks + stealTicks + guestNiceTicks;
+                       iowTicks + irqTicks + sirqTicks + stealTicks;
 
   if (n > required_tickinfo_count + 3) {
     pticks->steal = stealTicks;
@@ -2174,11 +2171,7 @@ bool os::Linux::print_container_info(outputStream* st) {
   int i = OSContainer::active_processor_count();
   st->print("active_processor_count: ");
   if (i > 0) {
-    if (ActiveProcessorCount > 0) {
-      st->print_cr("%d, but overridden by -XX:ActiveProcessorCount %d", i, ActiveProcessorCount);
-    } else {
-      st->print_cr("%d", i);
-    }
+    st->print_cr("%d", i);
   } else {
     st->print_cr("not supported");
   }
@@ -5384,20 +5377,21 @@ bool os::supports_map_sync() {
 }
 
 void os::print_memory_mappings(char* addr, size_t bytes, outputStream* st) {
-  // Note: all ranges are "[..)"
   unsigned long long start = (unsigned long long)addr;
   unsigned long long end = start + bytes;
   FILE* f = os::fopen("/proc/self/maps", "r");
   int num_found = 0;
   if (f != NULL) {
-    st->print_cr("Range [%llx-%llx) contains: ", start, end);
+    st->print("Range [%llx-%llx) contains: ", start, end);
     char line[512];
     while(fgets(line, sizeof(line), f) == line) {
-      unsigned long long segment_start = 0;
-      unsigned long long segment_end = 0;
-      if (::sscanf(line, "%llx-%llx", &segment_start, &segment_end) == 2) {
+      unsigned long long a1 = 0;
+      unsigned long long a2 = 0;
+      if (::sscanf(line, "%llx-%llx", &a1, &a2) == 2) {
         // Lets print out every range which touches ours.
-        if (segment_start < end && segment_end > start) {
+        if ((a1 >= start && a1 < end) || // left leg in
+            (a2 >= start && a2 < end) || // right leg in
+            (a1 < start && a2 >= end)) { // superimposition
           num_found ++;
           st->print("%s", line); // line includes \n
         }
@@ -5405,7 +5399,7 @@ void os::print_memory_mappings(char* addr, size_t bytes, outputStream* st) {
     }
     ::fclose(f);
     if (num_found == 0) {
-      st->print_cr("nothing.");
+      st->print("nothing.");
     }
     st->cr();
   }
