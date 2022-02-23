@@ -278,6 +278,7 @@ void HeapRegion::note_self_forwarding_removal_start(bool during_concurrent_start
   // mark all objects we find to be self-forwarded on the prev
   // bitmap. So all objects need to be below PTAMS.
   _prev_marked_bytes = 0;
+  _prev_top_at_mark_start = top();
 
   if (during_concurrent_start) {
     // During concurrent start, we'll also explicitly mark all objects
@@ -294,11 +295,8 @@ void HeapRegion::note_self_forwarding_removal_start(bool during_concurrent_start
   }
 }
 
-void HeapRegion::note_self_forwarding_removal_end(size_t marked_bytes) {
-  assert(marked_bytes <= used(),
-         "marked: " SIZE_FORMAT " used: " SIZE_FORMAT, marked_bytes, used());
-  _prev_top_at_mark_start = top();
-  _prev_marked_bytes = marked_bytes;
+void HeapRegion::note_self_forwarding_removal_end_par(size_t marked_bytes) {
+  Atomic::add(&_prev_marked_bytes, marked_bytes, memory_order_relaxed);
 }
 
 // Code roots support
@@ -479,6 +477,7 @@ protected:
   VerifyOption _vo;
 public:
   // _vo == UsePrevMarking -> use "prev" marking information,
+  // _vo == UseNextMarking -> use "next" marking information,
   // _vo == UseFullMarking -> use "next" marking bitmap but no TAMS.
   G1VerificationClosure(G1CollectedHeap* g1h, VerifyOption vo) :
     _g1h(g1h), _ct(g1h->card_table()),

@@ -67,8 +67,10 @@ public:
 };
 
 class G1PostEvacuateCollectionSetCleanupTask1::SampleCollectionSetCandidatesTask : public G1AbstractSubTask {
+
 public:
-  SampleCollectionSetCandidatesTask() : G1AbstractSubTask(G1GCPhaseTimes::SampleCollectionSetCandidates) { }
+  SampleCollectionSetCandidatesTask() :
+    G1AbstractSubTask(G1GCPhaseTimes::SampleCollectionSetCandidates) { }
 
   static bool should_execute() {
     return G1CollectedHeap::heap()->should_sample_collection_set_candidates();
@@ -84,8 +86,8 @@ public:
     public:
       G1SegmentedArrayMemoryStats _total;
 
-      bool do_heap_region(HeapRegion* r) override {
-        _total.add(r->rem_set()->card_set_memory_stats());
+      bool do_heap_region(HeapRegion* hr) override {
+        _total.add(hr->rem_set()->card_set_memory_stats());
         return false;
       }
     } cl;
@@ -109,7 +111,7 @@ public:
 
   double worker_cost() const override {
     assert(_evac_failure_regions->evacuation_failed(), "Should not call this if not executed");
-    return _evac_failure_regions->num_regions_failed_evacuation();
+    return _evac_failure_regions->num_regions_failed_evacuation() * G1RemoveSelfForwardPtrsWorkerCost;
   }
 
   void do_work(uint worker_id) override {
@@ -355,6 +357,40 @@ class RedirtyLoggedCardTableEntryClosure : public G1CardTableEntryClosure {
   }
 
   size_t num_dirtied()   const { return _num_dirtied; }
+};
+
+class G1PostEvacuateCollectionSetCleanupTask2::VerifyAfterSelfForwardingPtrRemovalTask : public G1AbstractSubTask {
+  G1EvacFailureRegions* _evac_failure_regions;
+  HeapRegionClaimer _claimer;
+
+  class VerifyRegionClosure : public HeapRegionClosure {
+  public:
+    bool do_heap_region(HeapRegion* hr) override {
+      G1CollectedHeap::heap()->verifier()->check_bitmaps("Self-Forwarding Ptr Removal", hr);
+      return false;
+    }
+  };
+
+public:
+  VerifyAfterSelfForwardingPtrRemovalTask(G1EvacFailureRegions* evac_failure_regions) :
+    G1AbstractSubTask(G1GCPhaseTimes::VerifyAfterSelfForwardingPtrRemoval),
+    _evac_failure_regions(evac_failure_regions),
+    _claimer(0) {
+    assert(G1VerifyBitmaps && _evac_failure_regions->evacuation_failed(), "precondition");
+  }
+
+  void set_max_workers(uint max_workers) override {
+    _claimer.set_n_workers(max_workers);
+  }
+
+  double worker_cost() const override {
+    return _evac_failure_regions->num_regions_failed_evacuation();
+  }
+
+  void do_work(uint worker_id) override {
+    VerifyRegionClosure closure;
+    _evac_failure_regions->par_iterate(&closure, &_claimer, worker_id);
+  }
 };
 
 class G1PostEvacuateCollectionSetCleanupTask2::RedirtyLoggedCardsTask : public G1AbstractSubTask {
@@ -679,6 +715,9 @@ G1PostEvacuateCollectionSetCleanupTask2::G1PostEvacuateCollectionSetCleanupTask2
 
   if (evac_failure_regions->evacuation_failed()) {
     add_parallel_task(new RestorePreservedMarksTask(per_thread_states->preserved_marks_set()));
+    if (G1VerifyBitmaps) {
+      add_parallel_task(new VerifyAfterSelfForwardingPtrRemovalTask(evac_failure_regions));
+    }
   }
   add_parallel_task(new RedirtyLoggedCardsTask(per_thread_states->rdcqs(), evac_failure_regions));
   add_parallel_task(new FreeCollectionSetTask(evacuation_info,

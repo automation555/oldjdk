@@ -501,9 +501,9 @@ public:
   void note_self_forwarding_removal_start(bool during_concurrent_start,
                                           bool during_conc_mark);
 
-  // Notify the region that we have finished processing self-forwarded
-  // objects during evac failure handling.
-  void note_self_forwarding_removal_end(size_t marked_bytes);
+  // Notify the region that we have partially finished processing self-forwarded
+  // objects during evacuation failure handling.
+  void note_self_forwarding_removal_end_par(size_t marked_bytes);
 
   uint index_in_opt_cset() const {
     assert(has_index_in_opt_cset(), "Opt cset index not set.");
@@ -582,11 +582,15 @@ public:
   void print_on(outputStream* st) const;
 
   // vo == UsePrevMarking -> use "prev" marking information,
+  // vo == UseNextMarking -> use "next" marking information
   // vo == UseFullMarking -> use "next" marking bitmap but no TAMS
   //
   // NOTE: Only the "prev" marking information is guaranteed to be
   // consistent most of the time, so most calls to this should use
   // vo == UsePrevMarking.
+  // Currently, there is only one case where this is called with
+  // vo == UseNextMarking, which is to verify the "next" marking
+  // information at the end of remark.
   // Currently there is only one place where this is called with
   // vo == UseFullMarking, which is to verify the marking during a
   // full GC.

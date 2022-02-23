@@ -57,6 +57,7 @@ public:
 // - Purge Code Roots (s)
 // - Reset Hot Card Cache (s)
 // - Update Derived Pointers (s)
+// - Verify Retained Regions
 // - Redirty Logged Cards
 // - Restore Preserved Marks (on evacuation failure)
 // - Free Collection Set
@@ -68,6 +69,7 @@ class G1PostEvacuateCollectionSetCleanupTask2 : public G1BatchedTask {
   class UpdateDerivedPointersTask;
 #endif
 
+  class VerifyAfterSelfForwardingPtrRemovalTask;
   class RedirtyLoggedCardsTask;
   class RestorePreservedMarksTask;
   class FreeCollectionSetTask;
