@@ -30,6 +30,7 @@
 #include "gc/g1/g1BlockOffsetTable.inline.hpp"
 #include "gc/g1/g1CollectedHeap.inline.hpp"
 #include "gc/g1/g1ConcurrentMarkBitMap.inline.hpp"
+#include "gc/g1/g1EvacFailureObjectsSet.inline.hpp"
 #include "gc/g1/g1Predictions.hpp"
 #include "gc/g1/g1SegmentedArray.inline.hpp"
 #include "oops/oop.inline.hpp"
@@ -103,8 +104,12 @@ inline bool HeapRegion::is_obj_dead_with_size(const oop obj, const G1CMBitMap* c
 }
 
 inline bool HeapRegion::block_is_obj(const HeapWord* p) const {
-  assert(p >= bottom() && p < top(), "precondition");
-  assert(!is_continues_humongous(), "p must point to block-start");
+  G1CollectedHeap* g1h = G1CollectedHeap::heap();
+
+  if (!this->is_in(p)) {
+    assert(is_continues_humongous(), "This case can only happen for humongous regions");
+    return (p == humongous_start_region()->bottom());
+  }
   // When class unloading is enabled it is not safe to only consider top() to conclude if the
   // given pointer is a valid object. The situation can occur both for class unloading in a
   // Full GC and during a concurrent cycle.
@@ -113,9 +118,9 @@ inline bool HeapRegion::block_is_obj(const HeapWord* p) const {
   // During a concurrent cycle class unloading is done after marking is complete and objects
   // for the unloaded classes will be stale until the regions are collected.
   if (ClassUnloading) {
-    return !G1CollectedHeap::heap()->is_obj_dead(cast_to_oop(p), this);
+    return !g1h->is_obj_dead(cast_to_oop(p), this);
   }
-  return true;
+  return p < top();
 }
 
 inline size_t HeapRegion::block_size_using_bitmap(const HeapWord* addr, const G1CMBitMap* const prev_bitmap) const {
@@ -183,6 +188,10 @@ inline void HeapRegion::reset_skip_compacting_after_full_gc() {
 }
 
 inline void HeapRegion::reset_after_full_gc_common() {
+  if (is_empty()) {
+    reset_bot();
+  }
+
   // Clear unused heap memory in debug builds.
   if (ZapUnusedHeapArea) {
     mangle_unused_area();
@@ -227,17 +236,33 @@ inline HeapWord* HeapRegion::allocate(size_t min_word_size,
   return allocate_impl(min_word_size, desired_word_size, actual_word_size);
 }
 
-inline void HeapRegion::update_bot_for_obj(HeapWord* obj_start, size_t obj_size) {
-  assert(is_old(), "should only do BOT updates for old regions");
+inline HeapWord* HeapRegion::bot_threshold_for_addr(const void* addr, bool assert_old) {
+  HeapWord* threshold = _bot_part.threshold_for_addr(addr);
+  assert(threshold >= addr,
+         "threshold must be at or after given address. " PTR_FORMAT " >= " PTR_FORMAT,
+         p2i(threshold), p2i(addr));
+  assert(!assert_old || is_old(),
+         "Should only calculate BOT threshold for old regions. addr: " PTR_FORMAT " region:" HR_FORMAT,
+         p2i(addr), HR_FORMAT_PARAMS(this));
+  return threshold;
+}
 
+inline void HeapRegion::update_bot_crossing_threshold(HeapWord** threshold, HeapWord* obj_start, HeapWord* obj_end, bool assert_old) {
+  assert(!assert_old || is_old(), "should only do BOT updates for old regions");
+  assert(is_in(obj_start), "obj_start must be in this region: " HR_FORMAT
+         " obj_start " PTR_FORMAT " obj_end " PTR_FORMAT " threshold " PTR_FORMAT,
+         HR_FORMAT_PARAMS(this),
+         p2i(obj_start), p2i(obj_end), p2i(*threshold));
+  _bot_part.alloc_block_work(threshold, obj_start, obj_end);
+}
+
+inline void HeapRegion::update_bot_at(HeapWord* obj_start, size_t obj_size, bool assert_old) {
+  HeapWord* threshold = bot_threshold_for_addr(obj_start, assert_old);
   HeapWord* obj_end = obj_start + obj_size;
 
-  assert(is_in(obj_start), "obj_start must be in this region: " HR_FORMAT
-         " obj_start " PTR_FORMAT " obj_end " PTR_FORMAT,
-         HR_FORMAT_PARAMS(this),
-         p2i(obj_start), p2i(obj_end));
-
-  _bot_part.update_for_block(obj_start, obj_end);
+  if (obj_end > threshold) {
+    update_bot_crossing_threshold(&threshold, obj_start, obj_end, assert_old);
+  }
 }
 
 inline void HeapRegion::note_start_of_marking() {
@@ -416,6 +441,10 @@ inline void HeapRegion::record_surv_words_in_group(size_t words_survived) {
   assert(has_valid_age_in_surv_rate(), "pre-condition");
   int age_in_group = age_in_surv_rate_group();
   _surv_rate_group->record_surviving_words(age_in_group, words_survived);
+}
+
+inline void HeapRegion::record_evac_failure_obj(oop obj, size_t word_size) {
+  _evac_failure_objs.record(obj, word_size);
 }
 
 #endif // SHARE_GC_G1_HEAPREGION_INLINE_HPP
