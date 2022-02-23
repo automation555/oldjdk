@@ -27,7 +27,7 @@
 
 #include "gc/shared/blockOffsetTable.hpp"
 #include "gc/shared/cardTable.hpp"
-#include "gc/shared/workerThread.hpp"
+#include "gc/shared/workgroup.hpp"
 #include "memory/allocation.hpp"
 #include "memory/iterator.hpp"
 #include "memory/memRegion.hpp"
@@ -238,7 +238,7 @@ class Space: public CHeapObj<mtGC> {
 // to support other space types. See ContiguousDCTOC for a sub-class
 // that works with ContiguousSpaces.
 
-class DirtyCardToOopClosure: public MemRegionClosureRO {
+class DirtyCardToOopClosure : public ResourceObj {
 protected:
   OopIterateClosure* _cl;
   Space* _sp;
@@ -298,9 +298,10 @@ class CompactPoint : public StackObj {
 public:
   Generation* gen;
   CompactibleSpace* space;
+  HeapWord* threshold;
 
   CompactPoint(Generation* g = NULL) :
-    gen(g), space(NULL) {}
+    gen(g), space(NULL), threshold(0) {}
 };
 
 // A space that supports compaction operations.  This is usually, but not
@@ -376,8 +377,10 @@ public:
 
   // Some contiguous spaces may maintain some data structures that should
   // be updated whenever an allocation crosses a boundary.  This function
-  // initializes these data structures for further updates.
-  virtual void initialize_threshold() { }
+  // returns the first such boundary.
+  // (The default implementation returns the end of the space, so the
+  // boundary is never crossed.)
+  virtual HeapWord* initialize_threshold() { return end(); }
 
   // "q" is an object of the given "size" that should be forwarded;
   // "cp" names the generation ("gen") and containing "this" (which must
@@ -388,8 +391,9 @@ public:
   // be one, since compaction must succeed -- we go to the first space of
   // the previous generation if necessary, updating "cp"), reset compact_top
   // and then forward.  In either case, returns the new value of "compact_top".
-  // Invokes the "alloc_block" function of the then-current compaction
-  // space.
+  // If the forwarding crosses "cp->threshold", invokes the "cross_threshold"
+  // function of the then-current compaction space, and updates "cp->threshold
+  // accordingly".
   virtual HeapWord* forward(oop q, size_t size, CompactPoint* cp,
                     HeapWord* compact_top);
 
@@ -404,9 +408,12 @@ protected:
   HeapWord* _first_dead;
   HeapWord* _end_of_live;
 
-  // This the function to invoke when an allocation of an object covering
-  // "start" to "end" occurs to update other internal data structures.
-  virtual void alloc_block(HeapWord* start, HeapWord* the_end) { }
+  // This the function is invoked when an allocation of an object covering
+  // "start" to "end occurs crosses the threshold; returns the next
+  // threshold.  (The default implementation does nothing.)
+  virtual HeapWord* cross_threshold(HeapWord* start, HeapWord* the_end) {
+    return end();
+  }
 };
 
 class GenSpaceMangler;
@@ -532,6 +539,10 @@ class ContiguousSpace: public CompactibleSpace {
 
   // Debugging
   virtual void verify() const;
+
+  // Used to increase collection frequency.  "factor" of 0 means entire
+  // space.
+  void allocate_temporary_filler(int factor);
 };
 
 
@@ -622,8 +633,8 @@ class OffsetTableContigSpace: public ContiguousSpace {
   inline HeapWord* par_allocate(size_t word_size);
 
   // MarkSweep support phase3
-  virtual void initialize_threshold();
-  virtual void alloc_block(HeapWord* start, HeapWord* end);
+  virtual HeapWord* initialize_threshold();
+  virtual HeapWord* cross_threshold(HeapWord* start, HeapWord* end);
 
   virtual void print_on(outputStream* st) const;
 
