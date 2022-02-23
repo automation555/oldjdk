@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -830,7 +830,10 @@ bool PhaseIdealLoop::create_loop_nest(IdealLoopTree* loop, Node_List &old_new) {
     return false;
   }
 
+
   IfNode* exit_test = head->loopexit();
+  BoolTest::mask mask = exit_test->as_BaseCountedLoopEnd()->test_trip();
+  Node* cmp = exit_test->as_BaseCountedLoopEnd()->cmp_node();
 
   assert(back_control->Opcode() == Op_IfTrue, "wrong projection for back edge");
 
@@ -1123,9 +1126,6 @@ void PhaseIdealLoop::strip_mined_nest_back_to_counted_loop(IdealLoopTree* loop, 
 
 int PhaseIdealLoop::extract_long_range_checks(const IdealLoopTree* loop, jlong stride_con, int iters_limit, PhiNode* phi,
                                               Node_List& range_checks) {
-  if (stride_con < 0) { // only for stride_con > 0 && scale > 0 for now
-    return iters_limit;
-  }
   const jlong min_iters = 2;
   jlong reduced_iters_limit = iters_limit;
   jlong original_iters_limit = iters_limit;
@@ -1140,7 +1140,6 @@ int PhaseIdealLoop::extract_long_range_checks(const IdealLoopTree* loop, jlong s
         RangeCheckNode* rc = c->in(0)->as_RangeCheck();
         if (loop->is_range_check_if(rc, this, T_LONG, phi, range, offset, scale) &&
             loop->is_invariant(range) && loop->is_invariant(offset) &&
-            scale > 0 && // only for stride_con > 0 && scale > 0 for now
             original_iters_limit / ABS(scale * stride_con) >= min_iters) {
           reduced_iters_limit = MIN2(reduced_iters_limit, original_iters_limit/ABS(scale));
           range_checks.push(c);
@@ -1158,24 +1157,21 @@ int PhaseIdealLoop::extract_long_range_checks(const IdealLoopTree* loop, jlong s
 // i is never Z.  It will be B=Z-1 if S=1, or B=Z+1 if S=-1.  If |S|>1 the formula for the last value requires a floor
 // operation, specifically B=floor((Z-sgn(S)-A)/S)*S+A.  Thus i ranges as i:[A,B] or i:[A,Z) or i:[A,Z-U) for some U<S.
 
-// N.B. We handle only the case of positive S currently, so comments about S<0 are not operative at present.  Also,
-// we only support positive index scale value (K > 0) to simplify the logic for clamping 32-bit bounds (L_2, R_2).
-// For restrictions on S and K, see the guards in extract_long_range_checks.
-
 // Within the loop there may be many range checks.  Each such range check (R.C.) is of the form 0 <= i*K+L < R, where K
 // is a scale factor applied to the loop iteration variable i, and L is some offset; K, L, and R are loop-invariant.
 // Because R is never negative, this check can always be simplified to an unsigned check i*K+L <u R.
 
 // When a long loop over a 64-bit variable i (outer_iv) is decomposed into a series of shorter sub-loops over a 32-bit
-// variable j (inner_iv), j ranges over a shorter interval j:[0,Z_2), where the limit is chosen to prevent various cases
-// of 32-bit overflow (including multiplications j*K below).  In the sub-loop the logical value i is offset from j by a
-// 64-bit constant C, so i ranges in i:C+[0,Z_2).
+// variable j (inner_iv), j ranges over a shorter interval j:[0, B_2] or [0,Z_2) (assuming S > 0), where the limit is
+// chosen to prevent various cases of 32-bit overflow (including multiplications j*K below).  In the sub-loop the
+// logical value i is offset from j by a 64-bit constant C, so i ranges in i:C+[0,Z_2).
 
 // The union of all the C+[0,Z_2) ranges from the sub-loops must be identical to the whole range [A,B].  Assuming S>0,
 // the first C must be A itself, and the next C value is the previous C+Z_2.  In each sub-loop, j counts up from zero
 // and exits just before i=C+Z_2.
 
-// (N.B. If S<0 the formulas are different, because all the loops count downward.)
+// If S<0, j iterates over [A_2, 0]. The union of the sub-loops must be identical to the whole range [A, B] in this case
+// as well.
 
 // Returning to range checks, we see that each i*K+L <u R expands to (C+j)*K+L <u R, or j*K+Q <u R, where Q=(C*K+L).
 // (Recall that K and L and R are loop-invariant scale, offset and range values for a particular R.C.)  This is still a
@@ -1195,13 +1191,12 @@ int PhaseIdealLoop::extract_long_range_checks(const IdealLoopTree* loop, jlong s
 
 // If 32-bit multiplication j*K might overflow, we adjust the sub-loop limit Z_2 closer to zero to reduce j's range.
 
-// For each R.C. j*K+Q <u32 R, the range of mathematical values of j*K+Q in the sub-loop is [Q_min, Q_max), where
-// Q_min=Q and Q_max=Z_2*K+Q.  Making the upper limit Q_max be exclusive helps it integrate correctly with the strict
-// comparisons against R and R_2.  Sometimes a very high R will be replaced by an R_2 derived from the more moderate
-// Q_max, and replacing one exclusive limit by another exclusive limit avoids off-by-one complexities.
+// For each R.C. j*K+Q <u32 R, the range of mathematical values of j*K+Q in the sub-loop is [Q_min, Q_max], where
+// Q_min=Q and Q_max=B_2*K+Q (if S>0 and K>0), Q_min=A_2*K+Q and Q_max=Q (if S<0 and K>0),
+// Q_min=B_2*K+Q and Q_max=Q if (S>0 and K<0), Q_min=Q and Q_max=A_2*K+Q (if S<0 and K<0)
 
-// N.B. If (S*K)<0 then the formulas for Q_min and Q_max may differ; the values may need to be swapped and adjusted to
-// the correct type of bound (inclusive or exclusive).
+// If S*K>0 then, as the loop iterations progress, j*K+Q goes from Q_min towards Q_max.
+// If S*K<0 then j*K+Q starts at Q_max and goes towards Q_min.
 
 // Case A: Some Negatives (but no overflow).
 // Number line:
@@ -1210,7 +1205,8 @@ int PhaseIdealLoop::extract_long_range_checks(const IdealLoopTree* loop, jlong s
 // |    .     .    .  Q_min..0..Q_max  .    .     .    |  small mixed
 //
 // if Q_min <s64 0, then use this test:
-// j*K + s32_trunc(Q_min) <u32 clamp(R, 0, Q_max)
+// j*K + s32_trunc(Q_min) <u32 clamp'(R, 0, Q_max) if S*K>0
+// j*K + s32_trunc(Q_max) <u32 clamp'(R, 0, Q_max) if S*K<0
 
 // If the 32-bit truncation loses information, no harm is done, since certainly the clamp also returns R_2=zero.
 
@@ -1221,31 +1217,38 @@ int PhaseIdealLoop::extract_long_range_checks(const IdealLoopTree* loop, jlong s
 // |    .     .    .    .    0    . Q_min..Q_max  .    |  s64 positive
 //
 // if both Q_min, Q_max >=s64 0, then use this test:
-// j*K + 0 <u32 clamp(R, Q_min, Q_max) - Q_min
+// j*K + 0 <u32 clamp'(R, Q_min, Q_max) - Q_min if S*K>0
 // or equivalently:
-// j*K + 0 <u32 clamp(R - Q_min, 0, Q_max - Q_min)
+// j*K + 0 <u32 clamp'(R - Q_min, 0, Q_max - Q_min)
+//
+// j*K + Q_max - Q_min <u32 clamp'(R, Q_min, Q_max) - Q_min if S*K<0
 
 // Case C: Overflow in the 64-bit domain
 // Number line:
 // |..Q_max-2^64   .    .    0    .    .    .   Q_min..|  s64 overflow
 //
 // if Q_min >=s64 0 but Q_max <s64 0, then use this test:
-// j*K + 0 <u32 clamp(R, Q_min, R) - Q_min
+// j*K + 0 <u32 clamp(R, Q_min, R) - Q_min if S*K>0
 // or equivalently:
 // j*K + 0 <u32 clamp(R - Q_min, 0, R - Q_min)
 // or also equivalently:
 // j*K + 0 <u32 max(0, R - Q_min)
 //
+// j*K + Q_max - Q_min <u32 clamp(R, Q_min, R) - Q_min if S*K<0
+//
 // Here the clamp function is a simple 64-bit min/max:
 // clamp(X, L, H) := max(L, min(X, H))
+// clamp'(X, L, H) := max(L, min(X-1, H)+1) (in case H is inclusive but X is not)
 // When degenerately L > H, it returns L not H.
 //
 // Tests above can be merged into a single one:
 // L_clamp = Q_min < 0 ? 0 : Q_min
-// H_clamp = Q_max < Q_min ? R : Q_max
-// j*K + Q_min - L_clamp <u32 clamp(R, L_clamp, H_clamp) - L_clamp
+// H_clamp = Q_max+1 < Q_min ? R : Q_max+1
+// j*K + Q_min - L_clamp <u32 clamp(R, L_clamp, H_clamp) - L_clamp if S*K>0
 // or equivalently:
 // j*K + Q_min - L_clamp <u32 clamp(R - L_clamp, 0, H_clamp - L_clamp)
+//
+// j*K + Q_max - L_clamp <u32 clamp(R, L_clamp, H_clamp) - L_clamp if S*K>0
 //
 // Readers may find the equivalent forms easier to reason about, but the forms given first generate better code.
 
@@ -1254,6 +1257,12 @@ void PhaseIdealLoop::transform_long_range_checks(int stride_con, const Node_List
                                                  Node* iv_add, LoopNode* inner_head) {
   Node* long_zero = _igvn.longcon(0);
   set_ctrl(long_zero, C->root());
+  Node* int_zero = _igvn.intcon(0);
+  set_ctrl(int_zero, this->C->root());
+  Node* long_one = _igvn.longcon(1);
+  set_ctrl(long_one, this->C->root());
+  Node* int_stride = _igvn.intcon(checked_cast<int>(stride_con));
+  set_ctrl(int_stride, this->C->root());
 
   for (uint i = 0; i < range_checks.size(); i++) {
     ProjNode* proj = range_checks.at(i)->as_Proj();
@@ -1267,8 +1276,8 @@ void PhaseIdealLoop::transform_long_range_checks(int stride_con, const Node_List
       // could be shared and have already been taken care of
       continue;
     }
-    bool converted = false;
-    bool ok = is_scaled_iv_plus_offset(rc_cmp->in(1), iv_add, &scale, &offset, T_LONG, &converted);
+    bool short_scale = false;
+    bool ok = is_scaled_iv_plus_offset(rc_cmp->in(1), iv_add, T_LONG, &scale, &offset, &short_scale);
     assert(ok, "inconsistent: was tested before");
     Node* range = rc_cmp->in(2);
     Node* c = rc->in(0);
@@ -1280,9 +1289,9 @@ void PhaseIdealLoop::transform_long_range_checks(int stride_con, const Node_List
 
     Node* L = offset;
 
-    if (converted) {
+    if (short_scale) {
       // This converts:
-      // i*K + L <u64 R
+      // (int)i*K + L <u64 R
       // with K an int into:
       // i*(long)K + L <u64 unsigned_min((long)max_jint + L + 1, R)
       // to protect against an overflow of i*K
@@ -1316,8 +1325,6 @@ void PhaseIdealLoop::transform_long_range_checks(int stride_con, const Node_List
     }
 
     Node* C = outer_phi;
-    Node* Z_2 = new ConvI2LNode(inner_iters_actual_int, TypeLong::LONG);
-    register_new_node(Z_2, entry_control);
 
     // Start with 64-bit values:
     //   i*K + L <u64 R
@@ -1331,10 +1338,23 @@ void PhaseIdealLoop::transform_long_range_checks(int stride_con, const Node_List
     // Compute endpoints of the range of values j*K.
     //  Q_min = (j=0)*K + L_2;  Q_max = (j=Z_2)*K + L_2
     Node* Q_min = L_2;
-    Node* Q_max = new MulLNode(Z_2, K);
+
+    // A_2 if S < 0
+    Node* B_2 = new LoopLimitNode(this->C, int_zero, inner_iters_actual_int, int_stride);
+    register_new_node(B_2, entry_control);
+    B_2 = new SubINode(B_2, int_stride);
+    register_new_node(B_2, entry_control);
+    B_2 = new ConvI2LNode(B_2);
+    register_new_node(B_2, entry_control);
+
+    Node* Q_max = new MulLNode(B_2, K);
     register_new_node(Q_max, entry_control);
     Q_max = new AddLNode(Q_max, L_2);
     register_new_node(Q_max, entry_control);
+
+    if (scale * stride_con < 0) {
+      swap(Q_min, Q_max);
+    }
 
     // L_clamp = Q_min < 0 ? 0 : Q_min
     Node* Q_min_cmp = new CmpLNode(Q_min, long_zero);
@@ -1344,12 +1364,15 @@ void PhaseIdealLoop::transform_long_range_checks(int stride_con, const Node_List
     Node* L_clamp = new CMoveLNode(Q_min_bool, Q_min, long_zero, TypeLong::LONG);
     register_new_node(L_clamp, entry_control);
 
-    // H_clamp = Q_max < Q_min ? R : Q_max
-    Node* Q_max_cmp = new CmpLNode(Q_max, Q_min);
+    Node* Q_max_plus_one = new AddLNode(Q_max, long_one);
+    register_new_node(Q_max_plus_one, entry_control);
+
+    // H_clamp = Q_max+1 < Q_min ? R : Q_max+1
+    Node* Q_max_cmp = new CmpLNode(Q_max_plus_one, Q_min);
     register_new_node(Q_max_cmp, entry_control);
     Node* Q_max_bool = new BoolNode(Q_max_cmp, BoolTest::lt);
     register_new_node(Q_max_bool, entry_control);
-    Node* H_clamp = new CMoveLNode(Q_max_bool, Q_max, R, TypeLong::LONG);
+    Node* H_clamp = new CMoveLNode(Q_max_bool, Q_max_plus_one, R, TypeLong::LONG);
     register_new_node(H_clamp, entry_control);
 
     // R_2 = clamp(R, L_clamp, H_clamp) - L_clamp
@@ -1361,11 +1384,18 @@ void PhaseIdealLoop::transform_long_range_checks(int stride_con, const Node_List
     R_2 = new ConvL2INode(R_2, TypeInt::POS);
     register_new_node(R_2, entry_control);
 
-    // Q = Q_min - L_clamp
-    // that is: Q = Q_min - 0 if Q_min < 0
-    // or:      Q = Q_min - Q_min = 0 if Q_min > 0
-    Node* Q = new SubLNode(Q_min, L_clamp);
-    register_new_node(Q, entry_control);
+    Node* Q = NULL;
+    if (scale * stride_con > 0) {
+      // Q = Q_min - L_clamp
+      // that is: Q = Q_min - 0 if Q_min < 0
+      // or:      Q = Q_min - Q_min = 0 if Q_min > 0
+      Q = new SubLNode(Q_min, L_clamp);
+      register_new_node(Q, entry_control);
+    } else {
+      Q = new SubLNode(Q_max, L_clamp);
+      register_new_node(Q, entry_control);
+    }
+
     Q = new ConvL2INode(Q, TypeInt::INT);
     register_new_node(Q, entry_control);
 
@@ -2846,7 +2876,7 @@ bool OuterStripMinedLoopEndNode::is_expanded(PhaseGVN *phase) const {
   if (phase->is_IterGVN()) {
     Node* backedge = proj_out_or_null(true);
     if (backedge != NULL) {
-      Node* head = backedge->unique_ctrl_out_or_null();
+      Node* head = backedge->unique_ctrl_out();
       if (head != NULL && head->is_OuterStripMinedLoop()) {
         if (head->find_out_with(Op_Phi) != NULL) {
           return true;
@@ -5725,45 +5755,38 @@ void PhaseIdealLoop::build_loop_late_post_work(Node *n, bool pinned) {
   }
   assert(early == legal || legal != C->root(), "bad dominance of inputs");
 
-  if (least != early) {
-    // Move the node above predicates as far up as possible so a
-    // following pass of loop predication doesn't hoist a predicate
-    // that depends on it above that node.
-    Node* new_ctrl = least;
-    for (;;) {
-      if (!new_ctrl->is_Proj()) {
-        break;
-      }
-      CallStaticJavaNode* call = new_ctrl->as_Proj()->is_uncommon_trap_if_pattern(Deoptimization::Reason_none);
-      if (call == NULL) {
-        break;
-      }
-      int req = call->uncommon_trap_request();
-      Deoptimization::DeoptReason trap_reason = Deoptimization::trap_request_reason(req);
-      if (trap_reason != Deoptimization::Reason_loop_limit_check &&
-          trap_reason != Deoptimization::Reason_predicate &&
-          trap_reason != Deoptimization::Reason_profile_predicate) {
-        break;
-      }
-      Node* c = new_ctrl->in(0)->in(0);
-      if (is_dominator(c, early) && c != early) {
-        break;
-      }
-      new_ctrl = c;
-    }
-    least = new_ctrl;
-  }
   // Try not to place code on a loop entry projection
   // which can inhibit range check elimination.
   if (least != early) {
-    Node* ctrl_out = least->unique_ctrl_out_or_null();
-    if (ctrl_out != NULL && ctrl_out->is_Loop() &&
-        least == ctrl_out->in(LoopNode::EntryControl) &&
-        (ctrl_out->is_CountedLoop() || ctrl_out->is_OuterStripMinedLoop())) {
-      Node* least_dom = idom(least);
-      if (get_loop(least_dom)->is_member(get_loop(least))) {
-        least = least_dom;
+    Node* ctrl_out = least->unique_ctrl_out();
+    if (ctrl_out && ctrl_out->is_Loop() &&
+        least == ctrl_out->in(LoopNode::EntryControl)) {
+      // Move the node above predicates as far up as possible so a
+      // following pass of loop predication doesn't hoist a predicate
+      // that depends on it above that node.
+      Node* new_ctrl = least;
+      for (;;) {
+        if (!new_ctrl->is_Proj()) {
+          break;
+        }
+        CallStaticJavaNode* call = new_ctrl->as_Proj()->is_uncommon_trap_if_pattern(Deoptimization::Reason_none);
+        if (call == NULL) {
+          break;
+        }
+        int req = call->uncommon_trap_request();
+        Deoptimization::DeoptReason trap_reason = Deoptimization::trap_request_reason(req);
+        if (trap_reason != Deoptimization::Reason_loop_limit_check &&
+            trap_reason != Deoptimization::Reason_predicate &&
+            trap_reason != Deoptimization::Reason_profile_predicate) {
+          break;
+        }
+        Node* c = new_ctrl->in(0)->in(0);
+        if (is_dominator(c, early) && c != early) {
+          break;
+        }
+        new_ctrl = c;
       }
+      least = new_ctrl;
     }
   }
 
