@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -62,6 +62,12 @@ public class InputGraph extends Properties.Entity implements FolderElement {
         blockEdges.add(edge);
         left.addSuccessor(right);
         return edge;
+    }
+
+    public void removeBlockEdge(InputBlock left, InputBlock right) {
+        InputBlockEdge edge = new InputBlockEdge(left, right);
+        blockEdges.remove(edge);
+        left.removeSuccessor(right);
     }
 
     public List<InputNode> findRootNodes() {
@@ -278,6 +284,18 @@ public class InputGraph extends Properties.Entity implements FolderElement {
 
     public InputBlock getBlock(String s) {
         return blocks.get(s);
+    }
+
+    public void permuteBlockNames(Map<String, String> namePermutation) {
+        Map<String, InputBlock> newBlocks = new LinkedHashMap<>();
+        for (Map.Entry<String, String> perm : namePermutation.entrySet()) {
+            String oldName = perm.getKey();
+            String newName = perm.getValue();
+            InputBlock b = blocks.get(oldName);
+            b.setName(newName);
+            newBlocks.put(newName, b);
+        }
+        blocks = newBlocks;
     }
 
     public Collection<InputBlockEdge> getBlockEdges() {
