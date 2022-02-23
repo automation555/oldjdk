@@ -1968,6 +1968,9 @@ public:
   void convert_d2i(Register dst, XMMRegister src);
   void convert_f2l(Register dst, XMMRegister src);
   void convert_d2l(Register dst, XMMRegister src);
+  void round_double(Register dst, XMMRegister src, Register rtmp, Register rcx);
+  void round_float(Register dst, XMMRegister src, Register rtmp, Register rcx);
+
 
   void cache_wb(Address line);
   void cache_wbsync(bool is_pre);
