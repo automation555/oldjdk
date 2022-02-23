@@ -48,15 +48,26 @@ public class PingThis {
         if (System.getProperty("os.name").startsWith("Windows")) {
             return;
         }
+        boolean isAIX = System.getProperty("os.name").startsWith("AIX");
         IPSupport.throwSkippedExceptionIfNonOperational();
 
         List<String> addrs = new ArrayList<String>();
 
         if (IPSupport.hasIPv4()) {
-            addrs.add("0.0.0.0");
+            if (isAIX) {
+                addrs.add("");
+            }
+            else {
+                addrs.add("0.0.0.0");
+            }
         }
         if (IPSupport.hasIPv6()) {
-            addrs.add("::0");
+            if (isAIX) {
+                addrs.add("::1");
+            }
+            else {
+                addrs.add("::0");
+            }
         }
 
         for (String addr : addrs) {
