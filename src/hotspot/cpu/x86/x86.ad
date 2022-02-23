@@ -1457,9 +1457,6 @@ const bool Matcher::match_rule_supported(int opcode) {
     case Op_VectorCastL2X:
     case Op_VectorCastF2X:
     case Op_VectorCastD2X:
-    case Op_VectorUCastB2X:
-    case Op_VectorUCastS2X:
-    case Op_VectorUCastI2X:
       if (UseAVX < 1) { // enabled for AVX only
         return false;
       }
@@ -1611,14 +1608,9 @@ const bool Matcher::match_rule_supported(int opcode) {
       }
       break;
     case Op_SqrtD:
-#ifdef _LP64
       if (UseSSE < 2) {
         return false;
       }
-#else
-      // x86_32.ad has a special match rule for SqrtD.
-      // Together with common x86 rules, this handles all UseSSE cases.
-#endif
       break;
   }
   return true;  // Match rules are supported by default.
@@ -1789,20 +1781,6 @@ const bool Matcher::match_rule_supported_vector(int opcode, int vlen, BasicType 
     case Op_VectorStoreMask:
       if (vlen == 2) {
         return false; // Implementation limitation
-      }
-      break;
-    case Op_VectorCastB2X:
-    case Op_VectorCastS2X:
-    case Op_VectorCastI2X:
-      if (bt != T_DOUBLE && size_in_bits == 256 && UseAVX < 2) {
-        return false;
-      }
-      break;
-    case Op_VectorCastL2X:
-      if (is_integral_type(bt) && size_in_bits == 256 && UseAVX < 2) {
-        return false;
-      } else if (!is_integral_type(bt) && !VM_Version::supports_avx512dq()) {
-        return false;
       }
       break;
     case Op_VectorCastD2X:
@@ -2555,21 +2533,15 @@ void vec_spill_helper(CodeBuffer *cbuf, bool is_load,
   }
 }
 
-template <class T>
-static inline GrowableArray<jvalue>* vreplicate_imm(BasicType bt, T con, int len) {
-  GrowableArray<jvalue>* val = new GrowableArray<jvalue>(len);
-  jvalue ele;
-  switch (bt) {
-    case T_BYTE:   ele.b = con; break;
-    case T_SHORT:  ele.s = con; break;
-    case T_INT:    ele.i = con; break;
-    case T_LONG:   ele.j = con; break;
-    case T_FLOAT:  ele.f = con; break;
-    case T_DOUBLE: ele.d = con; break;
-    default: ShouldNotReachHere();
-  }
-  for (int i = 0; i < len; i++) {
-    val->append(ele);
+static inline jlong replicate8_imm(int con, int width) {
+  // Load a constant of "width" (in bytes) and replicate it to fill 64bit.
+  assert(width == 1 || width == 2 || width == 4, "only byte, short or int types here");
+  int bit_width = width * 8;
+  jlong val = con;
+  val &= (((jlong) 1) << bit_width) - 1;  // mask off sign bits
+  while(bit_width < 64) {
+    val |= (val << bit_width);
+    bit_width <<= 1;
   }
   return val;
 }
@@ -3844,14 +3816,7 @@ instruct storeV(memory mem, vec src) %{
   ins_cost(145);
   format %{ "store_vector $mem,$src\n\t" %}
   ins_encode %{
-    switch (Matcher::vector_length_in_bytes(this, $src)) {
-      case  4: __ movdl    ($mem$$Address, $src$$XMMRegister); break;
-      case  8: __ movq     ($mem$$Address, $src$$XMMRegister); break;
-      case 16: __ movdqu   ($mem$$Address, $src$$XMMRegister); break;
-      case 32: __ vmovdqu  ($mem$$Address, $src$$XMMRegister); break;
-      case 64: __ evmovdqul($mem$$Address, $src$$XMMRegister, Assembler::AVX_512bit); break;
-      default: ShouldNotReachHere();
-    }
+    __ store_vector($mem$$Address, $src$$XMMRegister, Matcher::vector_length_in_bytes(this, $src));
   %}
   ins_pipe( pipe_slow );
 %}
@@ -4011,10 +3976,41 @@ instruct ReplB_imm(vec dst, immI con) %{
   match(Set dst (ReplicateB con));
   format %{ "replicateB $dst,$con" %}
   ins_encode %{
-    InternalAddress addr = $constantaddress(T_BYTE, vreplicate_imm(T_BYTE, $con$$constant, Matcher::vector_length(this)));
-    __ load_vector($dst$$XMMRegister, addr, Matcher::vector_length_in_bytes(this));
+    uint vlen = Matcher::vector_length(this);
+    InternalAddress const_addr = $constantaddress(replicate8_imm($con$$constant, 1));
+    if (vlen == 4) {
+      __ movdl($dst$$XMMRegister, const_addr);
+    } else {
+      __ movq($dst$$XMMRegister, const_addr);
+      if (vlen >= 16) {
+        if (VM_Version::supports_avx2()) {
+          int vlen_enc = vector_length_encoding(this);
+          __ vpbroadcastq($dst$$XMMRegister, $dst$$XMMRegister, vlen_enc);
+        } else {
+          assert(vlen == 16, "sanity");
+          __ punpcklqdq($dst$$XMMRegister, $dst$$XMMRegister);
+        }
+      }
+    }
   %}
   ins_pipe( pipe_slow );
+%}
+
+// Replicate byte scalar zero to be vector
+instruct ReplB_zero(vec dst, immI_0 zero) %{
+  match(Set dst (ReplicateB zero));
+  format %{ "replicateB $dst,$zero" %}
+  ins_encode %{
+    uint vlen = Matcher::vector_length(this);
+    if (vlen <= 16) {
+      __ pxor($dst$$XMMRegister, $dst$$XMMRegister);
+    } else {
+      // Use vpxor since AVX512F does not have 512bit vxorpd (requires AVX512DQ).
+      int vlen_enc = vector_length_encoding(this);
+      __ vpxor($dst$$XMMRegister, $dst$$XMMRegister, $dst$$XMMRegister, vlen_enc);
+    }
+  %}
+  ins_pipe( fpu_reg_reg );
 %}
 
 // ====================ReplicateS=======================================
@@ -4062,10 +4058,39 @@ instruct ReplS_imm(vec dst, immI con) %{
   match(Set dst (ReplicateS con));
   format %{ "replicateS $dst,$con" %}
   ins_encode %{
-    InternalAddress addr = $constantaddress(T_SHORT, vreplicate_imm(T_SHORT, $con$$constant, Matcher::vector_length(this)));
-    __ load_vector($dst$$XMMRegister, addr, Matcher::vector_length_in_bytes(this));
+    uint vlen = Matcher::vector_length(this);
+    InternalAddress const_addr = $constantaddress(replicate8_imm($con$$constant, 2));
+    if (vlen == 2) {
+      __ movdl($dst$$XMMRegister, const_addr);
+    } else {
+      __ movq($dst$$XMMRegister, const_addr);
+      if (vlen >= 8) {
+        if (VM_Version::supports_avx2()) {
+          int vlen_enc = vector_length_encoding(this);
+          __ vpbroadcastw($dst$$XMMRegister, $dst$$XMMRegister, vlen_enc);
+        } else {
+          assert(vlen == 8, "sanity");
+          __ punpcklqdq($dst$$XMMRegister, $dst$$XMMRegister);
+        }
+      }
+    }
   %}
-  ins_pipe( pipe_slow );
+  ins_pipe( fpu_reg_reg );
+%}
+
+instruct ReplS_zero(vec dst, immI_0 zero) %{
+  match(Set dst (ReplicateS zero));
+  format %{ "replicateS $dst,$zero" %}
+  ins_encode %{
+    uint vlen = Matcher::vector_length(this);
+    if (vlen <= 8) {
+      __ pxor($dst$$XMMRegister, $dst$$XMMRegister);
+    } else {
+      int vlen_enc = vector_length_encoding(this);
+      __ vpxor($dst$$XMMRegister, $dst$$XMMRegister, $dst$$XMMRegister, vlen_enc);
+    }
+  %}
+  ins_pipe( fpu_reg_reg );
 %}
 
 // ====================ReplicateI=======================================
@@ -4115,21 +4140,30 @@ instruct ReplI_imm(vec dst, immI con) %{
   match(Set dst (ReplicateI con));
   format %{ "replicateI $dst,$con" %}
   ins_encode %{
-    InternalAddress addr = $constantaddress(T_INT, vreplicate_imm(T_INT, $con$$constant, Matcher::vector_length(this)));
-    __ load_vector($dst$$XMMRegister, addr, Matcher::vector_length_in_bytes(this));
+    uint vlen = Matcher::vector_length(this);
+    InternalAddress const_addr = $constantaddress(replicate8_imm($con$$constant, 4));
+    if (vlen <= 4) {
+      __ movq($dst$$XMMRegister, const_addr);
+      if (vlen == 4) {
+        __ punpcklqdq($dst$$XMMRegister, $dst$$XMMRegister);
+      }
+    } else {
+      assert(VM_Version::supports_avx2(), "sanity");
+      int vlen_enc = vector_length_encoding(this);
+      __ movq($dst$$XMMRegister, const_addr);
+      __ vpbroadcastd($dst$$XMMRegister, $dst$$XMMRegister, vlen_enc);
+    }
   %}
   ins_pipe( pipe_slow );
 %}
 
-// Replicate scalar zero to be vector
+// Replicate integer (4 byte) scalar zero to be vector
 instruct ReplI_zero(vec dst, immI_0 zero) %{
-  match(Set dst (ReplicateB zero));
-  match(Set dst (ReplicateS zero));
   match(Set dst (ReplicateI zero));
   format %{ "replicateI $dst,$zero" %}
   ins_encode %{
-    uint vsize = Matcher::vector_length_in_bytes(this);
-    if (vsize <= 16) {
+    uint vlen = Matcher::vector_length(this);
+    if (vlen <= 4) {
       __ pxor($dst$$XMMRegister, $dst$$XMMRegister);
     } else {
       int vlen_enc = vector_length_encoding(this);
@@ -4260,8 +4294,17 @@ instruct ReplL_imm(vec dst, immL con) %{
   match(Set dst (ReplicateL con));
   format %{ "replicateL $dst,$con" %}
   ins_encode %{
-    InternalAddress addr = $constantaddress(T_LONG, vreplicate_imm(T_LONG, $con$$constant, Matcher::vector_length(this)));
-    __ load_vector($dst$$XMMRegister, addr, Matcher::vector_length_in_bytes(this));
+    uint vlen = Matcher::vector_length(this);
+    InternalAddress const_addr = $constantaddress($con);
+    if (vlen == 2) {
+      __ movq($dst$$XMMRegister, const_addr);
+      __ punpcklqdq($dst$$XMMRegister, $dst$$XMMRegister);
+    } else {
+      assert(VM_Version::supports_avx2(), "sanity");
+      int vlen_enc = vector_length_encoding(this);
+      __ movq($dst$$XMMRegister, const_addr);
+      __ vpbroadcastq($dst$$XMMRegister, $dst$$XMMRegister, vlen_enc);
+    }
   %}
   ins_pipe( pipe_slow );
 %}
@@ -4331,17 +4374,6 @@ instruct ReplF_mem(vec dst, memory mem) %{
   ins_pipe( pipe_slow );
 %}
 
-// Replicate float scalar immediate to be vector by loading from const table.
-instruct ReplF_imm(vec dst, immF con) %{
-  match(Set dst (ReplicateF con));
-  format %{ "replicateF $dst,$con" %}
-  ins_encode %{
-    InternalAddress addr = $constantaddress(T_FLOAT, vreplicate_imm(T_FLOAT, $con$$constant, Matcher::vector_length(this)));
-    __ load_vector($dst$$XMMRegister, addr, Matcher::vector_length_in_bytes(this));
-  %}
-  ins_pipe( pipe_slow );
-%}
-
 instruct ReplF_zero(vec dst, immF0 zero) %{
   match(Set dst (ReplicateF zero));
   format %{ "replicateF $dst,$zero" %}
@@ -4392,17 +4424,6 @@ instruct ReplD_mem(vec dst, memory mem) %{
       int vlen_enc = vector_length_encoding(this);
       __ vbroadcastsd($dst$$XMMRegister, $mem$$Address, vlen_enc);
     }
-  %}
-  ins_pipe( pipe_slow );
-%}
-
-// Replicate double (8 byte) scalar immediate to be vector by loading from const table.
-instruct ReplD_imm(vec dst, immD con) %{
-  match(Set dst (ReplicateD con));
-  format %{ "replicateD $dst,$con" %}
-  ins_encode %{
-    InternalAddress addr = $constantaddress(T_DOUBLE, vreplicate_imm(T_DOUBLE, $con$$constant, Matcher::vector_length(this)));
-    __ load_vector($dst$$XMMRegister, addr, Matcher::vector_length_in_bytes(this));
   %}
   ins_pipe( pipe_slow );
 %}
@@ -6855,6 +6876,9 @@ instruct vxor_mem(vec dst, vec src, memory mem) %{
 // --------------------------------- VectorCast --------------------------------------
 
 instruct vcastBtoX(vec dst, vec src) %{
+  predicate(UseAVX > 1 ||
+            Matcher::vector_element_basic_type(n) != T_FLOAT ||
+            Matcher::vector_length_in_bytes(n) < 32);
   match(Set dst (VectorCastB2X src));
   format %{ "vector_cast_b2x $dst,$src\t!" %}
   ins_encode %{
@@ -6923,8 +6947,11 @@ instruct vcastStoX(vec dst, vec src, vec vtmp, rRegP scratch) %{
 %}
 
 instruct vcastStoX_evex(vec dst, vec src) %{
-  predicate((UseAVX > 2 && VM_Version::supports_avx512vlbw()) ||
-            (Matcher::vector_length_in_bytes(n) >= Matcher::vector_length_in_bytes(n->in(1)))); // dst >= src
+  predicate((Matcher::vector_element_basic_type(n) == T_BYTE && UseAVX > 2 && VM_Version::supports_avx512vlbw()) ||
+            (Matcher::vector_element_basic_type(n) == T_FLOAT && (UseAVX > 1 || Matcher::vector_length_in_bytes(n) < 32)) ||
+            Matcher::vector_element_basic_type(n) == T_INT ||
+            Matcher::vector_element_basic_type(n) == T_LONG ||
+            Matcher::vector_element_basic_type(n) == T_DOUBLE);
   match(Set dst (VectorCastS2X src));
   format %{ "vector_cast_s2x $dst,$src\t!" %}
   ins_encode %{
@@ -6933,9 +6960,6 @@ instruct vcastStoX_evex(vec dst, vec src) %{
     int vlen_enc = vector_length_encoding(this);
     switch (to_elem_bt) {
       case T_BYTE:
-        if (!VM_Version::supports_avx512vl()) {
-          vlen_enc = Assembler::AVX_512bit;
-        }
         __ evpmovwb($dst$$XMMRegister, $src$$XMMRegister, src_vlen_enc);
         break;
       case T_INT:
@@ -6954,6 +6978,38 @@ instruct vcastStoX_evex(vec dst, vec src) %{
         __ vcvtdq2pd($dst$$XMMRegister, $dst$$XMMRegister, vlen_enc);
         break;
       }
+      default:
+        ShouldNotReachHere();
+    }
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct vcastBStoF_avx1(vec dst, vec src, vec xtmp) %{
+  predicate(UseAVX == 1 &&
+            Matcher::vector_element_basic_type(n) == T_FLOAT &&
+            Matcher::vector_length_in_bytes(n) == 32);
+  match(Set dst (VectorCastB2X src));
+  match(Set dst (VectorCastS2X src));
+  format %{ "vector_cast_bs2x $dst,$src\t! using $xtmp as TEMP" %}
+  effect(TEMP dst, TEMP xtmp);
+  ins_encode %{
+    BasicType elem_bt = Matcher::vector_element_basic_type(this, $src);
+    switch (elem_bt) {
+      case T_BYTE:
+        __ pmovsxbd($dst$$XMMRegister, $src$$XMMRegister);
+        __ pshufd($xtmp$$XMMRegister, $src$$XMMRegister, 0x01);
+        __ pmovsxbd($xtmp$$XMMRegister, $xtmp$$XMMRegister);
+        __ vinsertf128_high($dst$$XMMRegister, $xtmp$$XMMRegister);
+        __ vcvtdq2ps($dst$$XMMRegister, $dst$$XMMRegister, Assembler::AVX_256bit);
+        break;
+      case T_SHORT:
+        __ pmovsxwd($dst$$XMMRegister, $src$$XMMRegister);
+        __ pshufd($xtmp$$XMMRegister, $src$$XMMRegister, 0x0E);
+        __ pmovsxwd($xtmp$$XMMRegister, $xtmp$$XMMRegister);
+        __ vinsertf128_high($dst$$XMMRegister, $xtmp$$XMMRegister);
+        __ vcvtdq2ps($dst$$XMMRegister, $dst$$XMMRegister, Assembler::AVX_256bit);
+        break;
       default:
         ShouldNotReachHere();
     }
@@ -7086,11 +7142,44 @@ instruct vcastLtoBS(vec dst, vec src, rRegP scratch) %{
   ins_pipe( pipe_slow );
 %}
 
+instruct vcastLtoFD_avx(vec dst, vec src, vec xtmp1, vec xtmp2, rRegI tmp, rFlagsReg cr) %{
+  predicate(!VM_Version::supports_avx512dq() &&
+            is_floating_point_type(Matcher::vector_element_basic_type(n)) &&
+            Matcher::vector_length_in_bytes(n->in(1)) <= 32);
+  match(Set dst (VectorCastL2X src));
+  effect(TEMP xtmp1, TEMP xtmp2, TEMP tmp, KILL cr);
+  format %{ "vector_cast_l2x  $dst,$src\t! using $xtmp1, $xtmp2 and $tmp as TEMP" %}
+  ins_encode %{
+    BasicType to_elem_bt = Matcher::vector_element_basic_type(this);
+    int vlen = Matcher::vector_length(this);
+    int vlen_enc = vector_length_encoding(this, $src);
+    __ vector_castL2FD($dst$$XMMRegister, $src$$XMMRegister, $xtmp1$$XMMRegister, $xtmp2$$XMMRegister,
+                       $tmp$$Register, knoreg, to_elem_bt, vlen, vlen_enc);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
+instruct vcastLtoFD_evex(vec dst, vec src, vec xtmp1, vec xtmp2, rRegI tmp, kReg ktmp, rFlagsReg cr) %{
+  predicate(!VM_Version::supports_avx512dq() &&
+            is_floating_point_type(Matcher::vector_element_basic_type(n)) &&
+            Matcher::vector_length_in_bytes(n->in(1)) == 64);
+  match(Set dst (VectorCastL2X src));
+  effect(TEMP xtmp1, TEMP xtmp2, TEMP tmp, TEMP ktmp, KILL cr);
+  format %{ "vector_cast_l2x  $dst,$src\t! using $xtmp1, $xtmp2, $tmp and $ktmp as TEMP" %}
+  ins_encode %{
+    BasicType to_elem_bt = Matcher::vector_element_basic_type(this);
+    int vlen = Matcher::vector_length(this);
+    int vlen_enc = vector_length_encoding(this, $src);
+    __ vector_castL2FD($dst$$XMMRegister, $src$$XMMRegister, $xtmp1$$XMMRegister, $xtmp2$$XMMRegister,
+                       $tmp$$Register, $ktmp$$KRegister, to_elem_bt, vlen, vlen_enc);
+  %}
+  ins_pipe( pipe_slow );
+%}
+
 instruct vcastLtoX_evex(vec dst, vec src) %{
-  predicate(UseAVX > 2 ||
-            (Matcher::vector_element_basic_type(n) == T_INT ||
-             Matcher::vector_element_basic_type(n) == T_FLOAT ||
-             Matcher::vector_element_basic_type(n) == T_DOUBLE));
+  predicate((is_subword_type(Matcher::vector_element_basic_type(n)) && UseAVX > 2) ||
+            Matcher::vector_element_basic_type(n) == T_INT ||
+            (is_floating_point_type(Matcher::vector_element_basic_type(n)) && VM_Version::supports_avx512dq()));
   match(Set dst (VectorCastL2X src));
   format %{ "vector_cast_l2x  $dst,$src\t!" %}
   ins_encode %{
@@ -7132,11 +7221,9 @@ instruct vcastLtoX_evex(vec dst, vec src) %{
         }
         break;
       case T_FLOAT:
-        assert(UseAVX > 2 && VM_Version::supports_avx512dq(), "required");
         __ evcvtqq2ps($dst$$XMMRegister, $src$$XMMRegister, vlen_enc);
         break;
       case T_DOUBLE:
-        assert(UseAVX > 2 && VM_Version::supports_avx512dq(), "required");
         __ evcvtqq2pd($dst$$XMMRegister, $src$$XMMRegister, vlen_enc);
         break;
 
@@ -7210,22 +7297,6 @@ instruct vcastDtoL_reg_evex(vec dst, vec src, vec xtmp1, vec xtmp2, kReg ktmp1, 
     __ vector_castD2L_evex($dst$$XMMRegister, $src$$XMMRegister, $xtmp1$$XMMRegister,
                            $xtmp2$$XMMRegister, $ktmp1$$KRegister, $ktmp2$$KRegister,
                            ExternalAddress(vector_double_signflip()), $scratch$$Register, vlen_enc);
-  %}
-  ins_pipe( pipe_slow );
-%}
-
-instruct vucast(vec dst, vec src) %{
-  match(Set dst (VectorUCastB2X src));
-  match(Set dst (VectorUCastS2X src));
-  match(Set dst (VectorUCastI2X src));
-  format %{ "vector_ucast $dst,$src\t!" %}
-  ins_encode %{
-    assert(UseAVX > 0, "required");
-
-    BasicType from_elem_bt = Matcher::vector_element_basic_type(this, $src);
-    BasicType to_elem_bt = Matcher::vector_element_basic_type(this);
-    int vlen_enc = vector_length_encoding(this);
-    __ vector_unsigned_cast($dst$$XMMRegister, $src$$XMMRegister, vlen_enc, from_elem_bt, to_elem_bt);
   %}
   ins_pipe( pipe_slow );
 %}
