@@ -29,14 +29,50 @@
 #include "gc/g1/g1SegmentedArray.hpp"
 #include "utilities/growableArray.hpp"
 
+// A set of free lists holding freed segments for use by G1SegmentedArray,
+// e.g. G1CardSetAllocators::SegmentedArray
+template<MEMFLAGS flag, typename Configuration>
+class G1SegmentedArrayFreePool {
+  // The global free pool.
+  static G1SegmentedArrayFreePool _freelist_pool;
+  static constexpr uint NUM = Configuration::num_mem_object_types();
+
+  G1SegmentedArrayFreeList<flag>* _free_lists;
+
+public:
+  class G1ReturnMemoryProcessor;
+  typedef GrowableArrayCHeap<G1ReturnMemoryProcessor*, mtGC> G1ReturnMemoryProcessorSet;
+  class G1SegmentedArrayMemoryStats;
+
+  static G1SegmentedArrayFreePool* free_list_pool() { return &_freelist_pool; }
+  static G1SegmentedArrayMemoryStats free_list_sizes() { return _freelist_pool.memory_sizes(); }
+
+  static void update_unlink_processors(G1ReturnMemoryProcessorSet* unlink_processors);
+
+  G1SegmentedArrayFreePool();
+  ~G1SegmentedArrayFreePool();
+
+  G1SegmentedArrayFreeList<flag>* free_list(uint i) {
+    assert(i < NUM, "must be");
+    return &_free_lists[i];
+  }
+
+  G1SegmentedArrayMemoryStats memory_sizes() const;
+  size_t mem_size() const;
+
+  void print_on(outputStream* out);
+};
+
 // Statistics for a segmented array. Contains the number of segments and memory
 // used for each. Note that statistics are typically not taken atomically so there
 // can be inconsistencies. The user must be prepared for them.
-class G1SegmentedArrayMemoryStats {
-public:
+template<MEMFLAGS flag, typename Configuration>
+class G1SegmentedArrayFreePool<flag, Configuration>::G1SegmentedArrayMemoryStats {
+  static constexpr uint NUM = Configuration::num_mem_object_types();
 
-  size_t _num_mem_sizes[G1CardSetConfiguration::num_mem_object_types()];
-  size_t _num_segments[G1CardSetConfiguration::num_mem_object_types()];
+public:
+  size_t _num_mem_sizes[NUM];
+  size_t _num_segments[NUM];
 
   // Returns all-zero statistics.
   G1SegmentedArrayMemoryStats();
@@ -50,49 +86,12 @@ public:
   }
 
   void clear();
-
-  uint num_pools() const { return G1CardSetConfiguration::num_mem_object_types(); }
-};
-
-// A set of free lists holding freed segments for use by G1SegmentedArray,
-// e.g. G1CardSetAllocators::SegmentedArray
-template<MEMFLAGS flag>
-class G1SegmentedArrayFreePool {
-  // The global free pool.
-  static G1SegmentedArrayFreePool _freelist_pool;
-
-  const uint _num_free_lists;
-  G1SegmentedArrayFreeList<flag>* _free_lists;
-
-public:
-  static G1SegmentedArrayFreePool* free_list_pool() { return &_freelist_pool; }
-  static G1SegmentedArrayMemoryStats free_list_sizes() { return _freelist_pool.memory_sizes(); }
-
-  class G1ReturnMemoryProcessor;
-  typedef GrowableArrayCHeap<G1ReturnMemoryProcessor*, mtGC> G1ReturnMemoryProcessorSet;
-
-  static void update_unlink_processors(G1ReturnMemoryProcessorSet* unlink_processors);
-
-  explicit G1SegmentedArrayFreePool(uint num_free_lists);
-  ~G1SegmentedArrayFreePool();
-
-  G1SegmentedArrayFreeList<flag>* free_list(uint i) {
-    assert(i < _num_free_lists, "must be");
-    return &_free_lists[i];
-  }
-
-  uint num_free_lists() const { return _num_free_lists; }
-
-  G1SegmentedArrayMemoryStats memory_sizes() const;
-  size_t mem_size() const;
-
-  void print_on(outputStream* out);
 };
 
 // Data structure containing current in-progress state for returning memory to the
 // operating system for a single G1SegmentedArrayFreeList.
-template<MEMFLAGS flag>
-class G1SegmentedArrayFreePool<flag>::G1ReturnMemoryProcessor : public CHeapObj<mtGC> {
+template<MEMFLAGS flag, typename Configuration>
+class G1SegmentedArrayFreePool<flag, Configuration>::G1ReturnMemoryProcessor : public CHeapObj<mtGC> {
   G1SegmentedArrayFreeList<flag>* _source;
   size_t _return_to_vm_size;
 
