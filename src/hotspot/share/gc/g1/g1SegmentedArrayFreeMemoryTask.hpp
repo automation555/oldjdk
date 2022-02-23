@@ -33,6 +33,7 @@
 #include "utilities/ticks.hpp"
 
 // Task handling deallocation of free segmented array memory.
+template<MEMFLAGS flag, typename Configuration>
 class G1SegmentedArrayFreeMemoryTask : public G1ServiceTask {
 
   enum class State : uint {
@@ -49,15 +50,18 @@ class G1SegmentedArrayFreeMemoryTask : public G1ServiceTask {
                                                   "ReturnToOS",
                                                   "Cleanup" };
 
+  static constexpr uint NUM = Configuration::num_mem_object_types();
+
   const char* get_state_name(State value) const;
 
   State _state;
 
+  typedef typename G1SegmentedArrayFreePool<flag, Configuration>::G1SegmentedArrayMemoryStats G1SegmentedArrayMemoryStats;
   // Current total segmented array memory usage.
   G1SegmentedArrayMemoryStats _total_used;
 
-  typedef G1SegmentedArrayFreePool<mtGCCardSet>::G1ReturnMemoryProcessor G1ReturnMemoryProcessor;
-  typedef G1SegmentedArrayFreePool<mtGCCardSet>::G1ReturnMemoryProcessorSet G1ReturnMemoryProcessorSet;
+  typedef typename G1SegmentedArrayFreePool<flag, Configuration>::G1ReturnMemoryProcessor G1ReturnMemoryProcessor;
+  typedef typename G1SegmentedArrayFreePool<flag, Configuration>::G1ReturnMemoryProcessorSet G1ReturnMemoryProcessorSet;
 
   G1ReturnMemoryProcessorSet* _return_info;
 
